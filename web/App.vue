@@ -288,6 +288,11 @@ function handleHash() {
   route.value = appRoutes.includes(next) && !isAuthenticated.value ? 'login' : next
 }
 
+async function refreshData() {
+  await loadDevices()
+  if (route.value === 'logs') await loadLogs()
+}
+
 watch(route, async next => {
   if (!appRoutes.includes(next)) return
   await loadDevices()
@@ -299,7 +304,7 @@ watch(userSettings, (val) => {
   localStorage.setItem('rustping-settings', JSON.stringify(val))
   if (refreshTimer) {
     window.clearInterval(refreshTimer)
-    refreshTimer = window.setInterval(() => isApp.value && isAuthenticated.value && loadDevices(), val.refreshRate)
+    refreshTimer = window.setInterval(() => isApp.value && isAuthenticated.value && refreshData(), val.refreshRate)
   }
 }, { deep: true })
 
@@ -326,7 +331,7 @@ onMounted(() => {
     loadDevices()
     resetInactivityTimer()
   }
-  refreshTimer = window.setInterval(() => isApp.value && isAuthenticated.value && loadDevices(), userSettings.refreshRate)
+  refreshTimer = window.setInterval(() => isApp.value && isAuthenticated.value && refreshData(), userSettings.refreshRate)
   
   window.addEventListener('mousemove', handleActivity)
   window.addEventListener('keydown', handleActivity)
@@ -463,7 +468,7 @@ onBeforeUnmount(() => {
           <div class="side-bottom"><button @click="toggleTheme"><Sun v-if="theme === 'dark'" :size="17" /><Moon v-else :size="17" />{{ theme === 'dark' ? 'Light' : 'Dark' }} mode</button><button @click="logout"><LogOut :size="17" />Sign out</button><div class="operator"><span>{{ currentUser?.username?.slice(0,1).toUpperCase() }}</span><div><strong>{{ currentUser?.username }}</strong><small>{{ currentUser?.role }} operator</small></div></div></div>
         </aside>
         <div class="app-body">
-          <header class="app-topbar"><button class="mobile-toggle" aria-label="Toggle navigation" @click="mobileMenu = !mobileMenu"><Menu :size="20" /></button><div class="app-breadcrumb"><span>RUSTPING</span><ChevronRight :size="13" /><b>{{ route }}</b></div><div class="top-actions"><span class="engine-status"><i></i> Engine online</span><button aria-label="Refresh data" @click="loadDevices"><RefreshCw :class="{spin: loading}" :size="17" /></button><button aria-label="Notifications"><Bell :size="17" /><i v-if="offlineCount"></i></button></div></header>
+          <header class="app-topbar"><button class="mobile-toggle" aria-label="Toggle navigation" @click="mobileMenu = !mobileMenu"><Menu :size="20" /></button><div class="app-breadcrumb"><span>RUSTPING</span><ChevronRight :size="13" /><b>{{ route }}</b></div><div class="top-actions"><span class="engine-status"><i></i> Engine online</span><button aria-label="Refresh data" @click="refreshData"><RefreshCw :class="{spin: loading}" :size="17" /></button><button aria-label="Notifications" @click="go('devices'); statusFilter = 'offline'"><Bell :size="17" /><i v-if="offlineCount"></i></button></div></header>
           <main class="app-content">
             <template v-if="route === 'dashboard'">
               <div class="page-title"><div><small>LIVE OPERATIONS</small><h1>Network overview</h1><p>Every monitored signal, ordered for action.</p></div><button class="signal-button compact" @click="showDeviceModal = true"><Plus :size="15" /> Add device</button></div>
