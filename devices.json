@@ -49,5 +49,32 @@
     "sensors": [
       "Ping"
     ]
+  },
+  {
+    "name": "test",
+    "ip": "192.154.55.1",
+    "category": "Network",
+    "sensors": [
+      "Ping"
+    ],
+    "http_path": ""
+  },
+  {
+    "name": "test1",
+    "ip": "192.168.5.5",
+    "category": "Network",
+    "sensors": [
+      "Ping"
+    ],
+    "http_path": ""
+  },
+  {
+    "name": "test3",
+    "ip": "192.168.1.45",
+    "category": "Network",
+    "sensors": [
+      "Ping"
+    ],
+    "http_path": ""
   }
 ]

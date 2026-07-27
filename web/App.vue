@@ -5,10 +5,10 @@ import {
   CloudCog, Database, Download, FileClock, Gauge, LayoutDashboard, LogOut,
   Menu, Moon, Network, Plus, Radio, RefreshCw, Router, Search, Server, ShieldCheck,
   Signal, Sun, TerminalSquare, Trash2, X, Zap, Settings, Sliders, Layout, Clock,
-  PieChart, Wifi
+  PieChart, Wifi, Users
 } from 'lucide-vue-next'
 
-const appRoutes = ['dashboard', 'devices', 'logs', 'settings']
+const appRoutes = ['dashboard', 'devices', 'logs', 'settings', 'users']
 const brandLogo = '/static/app/rustping-logo.png'
 const brandIcon = '/static/app/favicon.png'
 const route = ref(window.location.hash.replace('#/', '') || 'login')
@@ -25,8 +25,22 @@ const logStatusFilter = ref('all')
 const faqOpen = ref(0)
 const mobileMenu = ref(false)
 const showDeviceModal = ref(false)
+const showUserModal = ref(false)
+const appUsers = ref(JSON.parse(localStorage.getItem('users') || 'null') || [])
+
+if (!appUsers.value || appUsers.value.length === 0) {
+  appUsers.value = [{
+    username: 'admin',
+    role: 'Admin',
+    passwordHash: '8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918',
+    permissions: { manage_devices: true, view_logs: true, manage_settings: true, manage_users: true }
+  }]
+  localStorage.setItem('users', JSON.stringify(appUsers.value))
+}
+
 const loginForm = reactive({ username: 'admin', password: '', error: '' })
 const deviceForm = reactive({ name: '', ip: '', category: 'Network', sensors: ['Ping'], http_path: '' })
+const userForm = reactive({ username: '', password: '', role: 'Operator', permissions: { manage_devices: false, view_logs: true, manage_settings: false, manage_users: false } })
 const emailForm = reactive({
   smtp_server: '', smtp_port: '587', smtp_username: '', smtp_password: '',
   from_email: '', to_email: '', test_email: ''
@@ -200,7 +214,13 @@ async function login() {
     return
   }
   const user = match || { username: 'admin', role: 'admin' }
-  currentUser.value = { username: user.username, role: user.role || 'admin', lastLogin: new Date().toISOString() }
+  const defaultPermissions = { manage_devices: true, view_logs: true, manage_settings: true, manage_users: true }
+  currentUser.value = { 
+    username: user.username, 
+    role: user.role || 'admin', 
+    lastLogin: new Date().toISOString(),
+    permissions: user.permissions || defaultPermissions
+  }
   sessionStorage.setItem('currentUser', JSON.stringify(currentUser.value))
   document.cookie = 'auth=true; path=/; SameSite=Lax'
   await loadDevices()
@@ -249,6 +269,46 @@ async function deleteDevice(device) {
   try { await fetch(`/devices/${sourceIndex}`, { method: 'DELETE' }) } catch { /* preview mode */ }
   devices.value.splice(sourceIndex, 1)
   flash(`${device.name} removed from monitoring.`)
+}
+
+function applyUserTemplate() {
+  if (userForm.role === 'Admin') {
+    userForm.permissions = { manage_devices: true, view_logs: true, manage_settings: true, manage_users: true }
+  } else if (userForm.role === 'Read-Only') {
+    userForm.permissions = { manage_devices: false, view_logs: false, manage_settings: false, manage_users: false }
+  } else {
+    userForm.permissions = { manage_devices: false, view_logs: true, manage_settings: false, manage_users: false }
+  }
+}
+
+async function saveUser() {
+  if (!userForm.username || !userForm.password) {
+    flash('Username and password are required.')
+    return
+  }
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(userForm.password))
+  const hash = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('')
+  
+  appUsers.value.push({
+    username: userForm.username,
+    role: userForm.role,
+    passwordHash: hash,
+    permissions: { ...userForm.permissions }
+  })
+  localStorage.setItem('users', JSON.stringify(appUsers.value))
+  
+  Object.assign(userForm, { username: '', password: '', role: 'Operator', permissions: { manage_devices: false, view_logs: true, manage_settings: false, manage_users: false } })
+  showUserModal.value = false
+  flash('User created successfully.')
+}
+
+function deleteUser(index) {
+  if (appUsers.value[index].username === 'admin' && appUsers.value.length === 1) {
+    flash('Cannot delete the last admin user.')
+    return
+  }
+  appUsers.value.splice(index, 1)
+  localStorage.setItem('users', JSON.stringify(appUsers.value))
 }
 
 async function loadEmailConfig() {
@@ -462,8 +522,9 @@ onBeforeUnmount(() => {
           <nav>
             <button :class="{active: route === 'dashboard'}" @click="go('dashboard')"><LayoutDashboard :size="18" />Overview</button>
             <button :class="{active: route === 'devices'}" @click="go('devices')"><Server :size="18" />Devices <b>{{ devices.length }}</b></button>
-            <button :class="{active: route === 'logs'}" @click="go('logs')"><TerminalSquare :size="18" />Event stream</button>
-            <button :class="{active: route === 'settings'}" @click="go('settings')"><Settings :size="18" />Settings</button>
+            <button v-if="currentUser?.permissions?.view_logs" :class="{active: route === 'logs'}" @click="go('logs')"><TerminalSquare :size="18" />Event stream</button>
+            <button v-if="currentUser?.permissions?.manage_settings" :class="{active: route === 'settings'}" @click="go('settings')"><Settings :size="18" />Settings</button>
+            <button v-if="currentUser?.permissions?.manage_users" :class="{active: route === 'users'}" @click="go('users')"><Users :size="18" />Operators</button>
           </nav>
           <div class="side-bottom"><button @click="toggleTheme"><Sun v-if="theme === 'dark'" :size="17" /><Moon v-else :size="17" />{{ theme === 'dark' ? 'Light' : 'Dark' }} mode</button><button @click="logout"><LogOut :size="17" />Sign out</button><div class="operator"><span>{{ currentUser?.username?.slice(0,1).toUpperCase() }}</span><div><strong>{{ currentUser?.username }}</strong><small>{{ currentUser?.role }} operator</small></div></div></div>
         </aside>
@@ -471,7 +532,7 @@ onBeforeUnmount(() => {
           <header class="app-topbar"><button class="mobile-toggle" aria-label="Toggle navigation" @click="mobileMenu = !mobileMenu"><Menu :size="20" /></button><div class="app-breadcrumb"><span>RUSTPING</span><ChevronRight :size="13" /><b>{{ route }}</b></div><div class="top-actions"><span class="engine-status"><i></i> Engine online</span><button aria-label="Refresh data" @click="refreshData"><RefreshCw :class="{spin: loading}" :size="17" /></button><button aria-label="Notifications" @click="go('devices'); statusFilter = 'offline'"><Bell :size="17" /><i v-if="offlineCount"></i></button></div></header>
           <main class="app-content">
             <template v-if="route === 'dashboard'">
-              <div class="page-title"><div><small>LIVE OPERATIONS</small><h1>Network overview</h1><p>Every monitored signal, ordered for action.</p></div><button class="signal-button compact" @click="showDeviceModal = true"><Plus :size="15" /> Add device</button></div>
+              <div class="page-title"><div><small>LIVE OPERATIONS</small><h1>Network overview</h1><p>Every monitored signal, ordered for action.</p></div><button v-if="currentUser?.permissions?.manage_devices" class="signal-button compact" @click="showDeviceModal = true"><Plus :size="15" /> Add device</button></div>
               <section class="metric-grid"><article><div><small>TOTAL DEVICES</small><strong>{{ devices.length }}</strong></div><span><Server :size="19" /></span><p><b>+{{ devices.length }}</b> active monitors</p></article><article><div><small>OPERATIONAL</small><strong>{{ onlineCount }}</strong></div><span><Signal :size="19" /></span><p><b>{{ health }}%</b> network health</p></article><article><div><small>INCIDENTS</small><strong>{{ offlineCount.toString().padStart(2,'0') }}</strong></div><span class="warn"><Bell :size="19" /></span><p :class="{danger: offlineCount}">{{ offlineCount ? 'Requires attention' : 'No active incidents' }}</p></article><article><div><small>UPTIME</small><strong>99.9<sup>%</sup></strong></div><span><CircleGauge :size="19" /></span><p><b>30D</b> rolling average</p></article></section>
               <section class="dashboard-grid">
                 <article class="panel throughput-panel"><div class="panel-title"><div><small>NETWORK LOAD</small><h2>Throughput</h2></div><span>LAST 12 HOURS</span></div>
@@ -558,9 +619,9 @@ onBeforeUnmount(() => {
             </template>
 
             <template v-else-if="route === 'devices'">
-              <div class="page-title"><div><small>INVENTORY / {{ devices.length.toString().padStart(2,'0') }}</small><h1>Monitored devices</h1><p>Manage every target and the checks assigned to it.</p></div><button class="signal-button compact" @click="showDeviceModal = true"><Plus :size="15" /> Add device</button></div>
+              <div class="page-title"><div><small>INVENTORY / {{ devices.length.toString().padStart(2,'0') }}</small><h1>Monitored devices</h1><p>Manage every target and the checks assigned to it.</p></div><button v-if="currentUser?.permissions?.manage_devices" class="signal-button compact" @click="showDeviceModal = true"><Plus :size="15" /> Add device</button></div>
               <div class="table-tools"><label><Search :size="16" /><input v-model="search" placeholder="Search name, IP, or category" /></label><div><button :class="{active: statusFilter === 'all'}" @click="statusFilter = 'all'">All</button><button :class="{active: statusFilter === 'online'}" @click="statusFilter = 'online'">Online</button><button :class="{active: statusFilter === 'offline'}" @click="statusFilter = 'offline'">Offline</button></div></div>
-              <section class="data-table"><div class="table-row table-head"><span>Device</span><span>Address</span><span>Category</span><span>Sensors</span><span>Status</span><span></span></div><div v-for="device in filteredDevices" :key="device.ip" class="table-row"><span class="device-cell"><i :class="{offline: device.ping_status === false}"></i><b>{{ device.name }}</b></span><span class="mono">{{ device.ip }}</span><span>{{ device.category }}</span><span class="sensor-list"><b v-for="sensor in device.sensors" :key="sensor">{{ sensor }}</b></span><span><em :class="['status-pill', {offline: device.ping_status === false}]"><i></i>{{ formatStatus(device) }}</em></span><span><button class="icon-button danger-button" :aria-label="`Delete ${device.name}`" @click="deleteDevice(device)"><Trash2 :size="15" /></button></span></div><div v-if="!filteredDevices.length" class="empty-state"><Search :size="24" /><strong>No devices found</strong><span>Try another search or filter.</span></div></section>
+              <section class="data-table"><div class="table-row table-head"><span>Device</span><span>Address</span><span>Category</span><span>Sensors</span><span>Status</span><span></span></div><div v-for="device in filteredDevices" :key="device.ip" class="table-row"><span class="device-cell"><i :class="{offline: device.ping_status === false}"></i><b>{{ device.name }}</b></span><span class="mono">{{ device.ip }}</span><span>{{ device.category }}</span><span class="sensor-list"><b v-for="sensor in device.sensors" :key="sensor">{{ sensor }}</b></span><span><em :class="['status-pill', {offline: device.ping_status === false}]"><i></i>{{ formatStatus(device) }}</em></span><span><button v-if="currentUser?.permissions?.manage_devices" class="icon-button danger-button" :aria-label="`Delete ${device.name}`" @click="deleteDevice(device)"><Trash2 :size="15" /></button></span></div><div v-if="!filteredDevices.length" class="empty-state"><Search :size="24" /><strong>No devices found</strong><span>Try another search or filter.</span></div></section>
             </template>
 
             <template v-else-if="route === 'logs'">
@@ -570,7 +631,7 @@ onBeforeUnmount(() => {
             </template>
 
             <template v-else-if="route === 'settings'">
-              <div class="page-title"><div><small>PREFERENCES</small><h1>Settings</h1><p>Configure interface options and alert routing.</p></div><button class="signal-button compact" @click="saveEmailConfig(false)">Save configuration <Check :size="15" /></button></div>
+              <div class="page-title"><div><small>PREFERENCES</small><h1>Settings</h1><p>Configure interface options and alert routing.</p></div><button v-if="currentUser?.permissions?.manage_settings" class="signal-button compact" @click="saveEmailConfig(false)">Save configuration <Check :size="15" /></button></div>
               <section class="settings-grid">
                 <!-- Appearance Settings -->
                 <article class="panel settings-card full-width">
@@ -642,11 +703,31 @@ onBeforeUnmount(() => {
                 </article>
               </section>
             </template>
+            
+            <template v-else-if="route === 'users'">
+              <div class="page-title"><div><small>ACCESS CONTROL / {{ appUsers.length.toString().padStart(2,'0') }}</small><h1>Operators</h1><p>Manage authentication and access rights for your team.</p></div><button v-if="currentUser?.permissions?.manage_users" class="signal-button compact" @click="showUserModal = true"><Plus :size="15" /> Add operator</button></div>
+              <section class="data-table">
+                <div class="table-row table-head"><span>Operator</span><span>Role</span><span style="grid-column: span 2">Permissions</span><span></span></div>
+                <div v-for="(user, index) in appUsers" :key="user.username" class="table-row">
+                  <span class="device-cell"><i></i><b>{{ user.username }}</b></span>
+                  <span>{{ user.role }}</span>
+                  <span class="sensor-list" style="grid-column: span 2">
+                    <b v-if="user.permissions?.manage_devices">Manage Devices</b>
+                    <b v-if="user.permissions?.view_logs">View Logs</b>
+                    <b v-if="user.permissions?.manage_settings">Modify Settings</b>
+                    <b v-if="user.permissions?.manage_users">Manage Users</b>
+                  </span>
+                  <span><button v-if="currentUser?.permissions?.manage_users && user.username !== 'admin'" class="icon-button danger-button" @click="deleteUser(index)"><Trash2 :size="15" /></button></span>
+                </div>
+              </section>
+            </template>
+
           </main>
         </div>
       </div>
 
       <div v-if="showDeviceModal" class="modal-backdrop" @click.self="showDeviceModal = false"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="device-modal-title"><div class="modal-head"><div><small>NEW MONITOR</small><h2 id="device-modal-title">Add a device</h2></div><button aria-label="Close" @click="showDeviceModal = false"><X :size="19" /></button></div><div class="field-grid"><label>Device name<input v-model="deviceForm.name" placeholder="Core gateway" /></label><label>IP or hostname<input v-model="deviceForm.ip" placeholder="10.0.0.1" /></label><label>Category<input v-model="deviceForm.category" placeholder="Network" /></label><label>HTTP URL<input v-model="deviceForm.http_path" placeholder="https://status.example.com" /></label></div><div class="sensor-pick"><small>SENSORS</small><div><button v-for="sensor in ['Ping','Http','Https']" :key="sensor" :class="{active: deviceForm.sensors.includes(sensor)}" @click="toggleSensor(sensor)"><Check v-if="deviceForm.sensors.includes(sensor)" :size="13" />{{ sensor }}</button></div></div><button class="signal-button modal-action" @click="addDevice">Begin monitoring <ArrowRight :size="15" /></button></section></div>
+      <div v-if="showUserModal" class="modal-backdrop" @click.self="showUserModal = false"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="user-modal-title"><div class="modal-head"><div><small>AUTHENTICATION</small><h2 id="user-modal-title">Create operator</h2></div><button aria-label="Close" @click="showUserModal = false"><X :size="19" /></button></div><div class="field-grid"><label>Username<input v-model="userForm.username" placeholder="Operator ID" autocomplete="new-password" /></label><label>Password<input type="password" v-model="userForm.password" placeholder="••••••••" autocomplete="new-password" /></label></div><div class="field-grid" style="margin-top:20px"><label>Role Template<select v-model="userForm.role" @change="applyUserTemplate"><option value="Admin">Admin (Full Access)</option><option value="Operator">Operator (Standard)</option><option value="Read-Only">Read-Only</option></select></label></div><div class="sensor-pick"><small>ADVANCED PERMISSIONS</small><div style="flex-direction:column;align-items:flex-start;margin-top:15px"><label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:12px;text-transform:none"><input type="checkbox" v-model="userForm.permissions.manage_devices" style="width:16px;height:16px;margin:0"> Manage network devices</label><label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:12px;text-transform:none"><input type="checkbox" v-model="userForm.permissions.view_logs" style="width:16px;height:16px;margin:0"> View and export live event stream</label><label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:12px;text-transform:none"><input type="checkbox" v-model="userForm.permissions.manage_settings" style="width:16px;height:16px;margin:0"> Modify interface and alert settings</label><label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:12px;text-transform:none"><input type="checkbox" v-model="userForm.permissions.manage_users" style="width:16px;height:16px;margin:0"> Manage operators and access</label></div></div><button class="signal-button modal-action" @click="saveUser">Create operator <ArrowRight :size="15" /></button></section></div>
     </template>
   </div>
 </template>
