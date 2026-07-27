@@ -4,10 +4,11 @@ import {
   Activity, ArrowRight, Bell, Check, ChevronDown, ChevronRight, CircleGauge,
   CloudCog, Database, Download, FileClock, Gauge, LayoutDashboard, LogOut,
   Menu, Moon, Network, Plus, Radio, RefreshCw, Router, Search, Server, ShieldCheck,
-  Signal, Sun, TerminalSquare, Trash2, X, Zap
+  Signal, Sun, TerminalSquare, Trash2, X, Zap, Settings, Sliders, Layout, Clock,
+  PieChart, Wifi
 } from 'lucide-vue-next'
 
-const appRoutes = ['dashboard', 'devices', 'logs', 'alerts']
+const appRoutes = ['dashboard', 'devices', 'logs', 'settings']
 const brandLogo = '/static/app/rustping-logo.png'
 const brandIcon = '/static/app/favicon.png'
 const route = ref(window.location.hash.replace('#/', '') || 'login')
@@ -28,6 +29,45 @@ const emailForm = reactive({
   smtp_server: '', smtp_port: '587', smtp_username: '', smtp_password: '',
   from_email: '', to_email: '', test_email: ''
 })
+const defaultSettings = {
+  graphStyle: 'Bar',
+  density: 'Comfortable',
+  refreshRate: 5000,
+  timeFormat: '24h'
+}
+const userSettings = reactive(JSON.parse(localStorage.getItem('rustping-settings') || JSON.stringify(defaultSettings)))
+
+const throughputData = [22,31,27,46,39,58,51,72,64,81,70,88,77,91,83,96,86,92,79,89,72,84,68,76]
+const polylinePoints = computed(() => throughputData.map((n, i) => `${(i / (throughputData.length - 1)) * 100},${100 - n}`).join(' '))
+const polygonPoints = computed(() => `0,100 ${polylinePoints.value} 100,100`)
+
+const latencyData = [12,15,14,18,22,25,20,19,15,14,12,18,35,42,30,22,18,15,14,16,14,15,13,12]
+const latencyPolyline = computed(() => latencyData.map((n, i) => `${(i / (latencyData.length - 1)) * 100},${100 - (n * 2)}`).join(' '))
+const latencyPolygon = computed(() => `0,100 ${latencyPolyline.value} 100,100`)
+
+const uptimeHistory = Array.from({length: 90}, (_, i) => Math.random() > 0.05)
+
+const trafficIngress = [42,51,47,66,59,78,71,92,84,101,90,108,97,111,103,116,106,112,99,109,92,104,88,96]
+const trafficEgress = [22,31,27,46,39,58,51,72,64,81,70,88,77,91,83,96,86,92,79,89,72,84,68,76]
+const ingressPolyline = computed(() => trafficIngress.map((n, i) => `${(i / (trafficIngress.length - 1)) * 100},${100 - (n * 0.8)}`).join(' '))
+const ingressPolygon = computed(() => `0,100 ${ingressPolyline.value} 100,100`)
+const egressPolyline = computed(() => trafficEgress.map((n, i) => `${(i / (trafficEgress.length - 1)) * 100},${100 - (n * 0.8)}`).join(' '))
+const egressPolygon = computed(() => `0,100 ${egressPolyline.value} 100,100`)
+
+const categoryStats = computed(() => {
+  const counts = devices.value.reduce((acc, d) => { acc[d.category] = (acc[d.category] || 0) + 1; return acc; }, {})
+  return Object.entries(counts).map(([name, count]) => ({ name, count, percent: Math.round((count / devices.value.length) * 100) })).sort((a,b) => b.count - a.count)
+})
+
+const sensorStats = computed(() => {
+  let ping = 0, http = 0;
+  devices.value.forEach(d => {
+    if (d.sensors.includes('Ping')) ping++;
+    if (d.sensors.includes('Http') || d.sensors.includes('Https')) http++;
+  })
+  return { ping, http, total: ping + http }
+})
+
 let refreshTimer
 let inactivityTimer
 
@@ -232,8 +272,16 @@ watch(route, async next => {
   if (!appRoutes.includes(next)) return
   await loadDevices()
   if (next === 'logs') await loadLogs()
-  if (next === 'alerts') await loadEmailConfig()
+  if (next === 'settings') await loadEmailConfig()
 })
+
+watch(userSettings, (val) => {
+  localStorage.setItem('rustping-settings', JSON.stringify(val))
+  if (refreshTimer) {
+    window.clearInterval(refreshTimer)
+    refreshTimer = window.setInterval(() => isApp.value && isAuthenticated.value && loadDevices(), val.refreshRate)
+  }
+}, { deep: true })
 
 function resetInactivityTimer() {
   if (inactivityTimer) window.clearTimeout(inactivityTimer)
@@ -258,7 +306,7 @@ onMounted(() => {
     loadDevices()
     resetInactivityTimer()
   }
-  refreshTimer = window.setInterval(() => isApp.value && isAuthenticated.value && loadDevices(), 5000)
+  refreshTimer = window.setInterval(() => isApp.value && isAuthenticated.value && loadDevices(), userSettings.refreshRate)
   
   window.addEventListener('mousemove', handleActivity)
   window.addEventListener('keydown', handleActivity)
@@ -277,7 +325,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div :class="['site', `theme-${theme}`]">
+  <div :class="['site', `theme-${theme}`, `density-${userSettings.density.toLowerCase()}`]">
     <Transition name="toast"><div v-if="notice" class="toast"><Signal :size="15" />{{ notice }}</div></Transition>
 
     <template v-if="route === 'home'">
@@ -390,7 +438,7 @@ onBeforeUnmount(() => {
             <button :class="{active: route === 'dashboard'}" @click="go('dashboard')"><LayoutDashboard :size="18" />Overview</button>
             <button :class="{active: route === 'devices'}" @click="go('devices')"><Server :size="18" />Devices <b>{{ devices.length }}</b></button>
             <button :class="{active: route === 'logs'}" @click="go('logs')"><TerminalSquare :size="18" />Event stream</button>
-            <button :class="{active: route === 'alerts'}" @click="go('alerts')"><Bell :size="18" />Alerts <i v-if="offlineCount">{{ offlineCount }}</i></button>
+            <button :class="{active: route === 'settings'}" @click="go('settings')"><Settings :size="18" />Settings</button>
           </nav>
           <div class="side-bottom"><button @click="toggleTheme"><Sun v-if="theme === 'dark'" :size="17" /><Moon v-else :size="17" />{{ theme === 'dark' ? 'Light' : 'Dark' }} mode</button><button @click="logout"><LogOut :size="17" />Sign out</button><div class="operator"><span>{{ currentUser?.username?.slice(0,1).toUpperCase() }}</span><div><strong>{{ currentUser?.username }}</strong><small>{{ currentUser?.role }} operator</small></div></div></div>
         </aside>
@@ -401,8 +449,84 @@ onBeforeUnmount(() => {
               <div class="page-title"><div><small>LIVE OPERATIONS</small><h1>Network overview</h1><p>Every monitored signal, ordered for action.</p></div><button class="signal-button compact" @click="showDeviceModal = true"><Plus :size="15" /> Add device</button></div>
               <section class="metric-grid"><article><div><small>TOTAL DEVICES</small><strong>{{ devices.length }}</strong></div><span><Server :size="19" /></span><p><b>+{{ devices.length }}</b> active monitors</p></article><article><div><small>OPERATIONAL</small><strong>{{ onlineCount }}</strong></div><span><Signal :size="19" /></span><p><b>{{ health }}%</b> network health</p></article><article><div><small>INCIDENTS</small><strong>{{ offlineCount.toString().padStart(2,'0') }}</strong></div><span class="warn"><Bell :size="19" /></span><p :class="{danger: offlineCount}">{{ offlineCount ? 'Requires attention' : 'No active incidents' }}</p></article><article><div><small>UPTIME</small><strong>99.9<sup>%</sup></strong></div><span><CircleGauge :size="19" /></span><p><b>30D</b> rolling average</p></article></section>
               <section class="dashboard-grid">
-                <article class="panel throughput-panel"><div class="panel-title"><div><small>NETWORK LOAD</small><h2>Throughput</h2></div><span>LAST 12 HOURS</span></div><div class="large-bars"><i v-for="(n,index) in [22,31,27,46,39,58,51,72,64,81,70,88,77,91,83,96,86,92,79,89,72,84,68,76]" :key="index" :style="{height:`${n}%`}"></i></div><div class="axis"><span>06:00</span><span>12:00</span><span>18:00</span><span>NOW</span></div></article>
+                <article class="panel throughput-panel"><div class="panel-title"><div><small>NETWORK LOAD</small><h2>Throughput</h2></div><span>LAST 12 HOURS</span></div>
+                  <div class="large-bars" :class="userSettings.graphStyle.toLowerCase()">
+                    <template v-if="userSettings.graphStyle === 'Bar'">
+                      <i v-for="(n,index) in throughputData" :key="index" :style="{height:`${n}%`}"></i>
+                    </template>
+                    <template v-else-if="userSettings.graphStyle === 'Line'">
+                      <svg viewBox="0 0 100 100" preserveAspectRatio="none" class="svg-graph">
+                        <polyline :points="polylinePoints" fill="none" stroke="var(--lime)" stroke-width="1.5" />
+                      </svg>
+                    </template>
+                    <template v-else-if="userSettings.graphStyle === 'Area'">
+                      <svg viewBox="0 0 100 100" preserveAspectRatio="none" class="svg-graph">
+                        <polygon :points="polygonPoints" fill="var(--lime-muted)" />
+                        <polyline :points="polylinePoints" fill="none" stroke="var(--lime)" stroke-width="1.5" />
+                      </svg>
+                    </template>
+                  </div>
+                  <div class="axis"><span>06:00</span><span>12:00</span><span>18:00</span><span>NOW</span></div></article>
+                  
                 <article class="panel health-panel"><div class="panel-title"><div><small>FLEET STATE</small><h2>Overall health</h2></div><span>LIVE</span></div><div class="health-donut" :style="{'--health': `${health * 3.6}deg`}"><div><strong>{{ health }}<sup>%</sup></strong><small>HEALTHY</small></div></div><div class="health-legend"><span><i></i>Online <b>{{ onlineCount }}</b></span><span><i></i>Offline <b>{{ offlineCount }}</b></span></div></article>
+                
+                <article class="panel throughput-panel"><div class="panel-title"><div><small>PERFORMANCE</small><h2>Global Latency</h2></div><span>24 HOURS</span></div>
+                  <div class="large-bars" :class="userSettings.graphStyle.toLowerCase()">
+                    <template v-if="userSettings.graphStyle === 'Bar'">
+                      <i v-for="(n,index) in latencyData" :key="index" :style="{height:`${n * 2}%`}"></i>
+                    </template>
+                    <template v-else-if="userSettings.graphStyle === 'Line'">
+                      <svg viewBox="0 0 100 100" preserveAspectRatio="none" class="svg-graph">
+                        <polyline :points="latencyPolyline" fill="none" stroke="var(--lime)" stroke-width="1.5" />
+                      </svg>
+                    </template>
+                    <template v-else-if="userSettings.graphStyle === 'Area'">
+                      <svg viewBox="0 0 100 100" preserveAspectRatio="none" class="svg-graph">
+                        <polygon :points="latencyPolygon" fill="var(--lime-muted)" />
+                        <polyline :points="latencyPolyline" fill="none" stroke="var(--lime)" stroke-width="1.5" />
+                      </svg>
+                    </template>
+                  </div>
+                  <div class="axis"><span>0ms</span><span>15ms</span><span>25ms</span><span>NOW</span></div></article>
+                
+                <article class="panel traffic-panel"><div class="panel-title"><div><small>BANDWIDTH</small><h2>Network Traffic</h2></div><span>LIVE</span></div>
+                  <div class="traffic-bars">
+                    <svg viewBox="0 0 100 100" preserveAspectRatio="none" class="svg-graph">
+                      <polygon :points="egressPolygon" fill="var(--lime-muted)" />
+                      <polyline :points="egressPolyline" fill="none" stroke="var(--lime)" stroke-width="1.5" />
+                      <polygon :points="ingressPolygon" fill="rgba(167, 195, 72, 0.2)" />
+                      <polyline :points="ingressPolyline" fill="none" stroke="var(--lime)" stroke-width="2.5" />
+                    </svg>
+                  </div>
+                  <div class="health-legend"><span><i></i>Ingress <b>4.2GB</b></span><span><i style="background:var(--lime-muted)"></i>Egress <b>1.8GB</b></span></div>
+                </article>
+
+                <article class="panel uptime-panel">
+                  <div class="panel-title"><div><small>RELIABILITY</small><h2>Uptime History</h2></div><span>90 DAYS</span></div>
+                  <div class="uptime-heatmap">
+                    <div v-for="(up, index) in uptimeHistory" :key="index" :class="['uptime-block', { down: !up }]"></div>
+                  </div>
+                  <div class="axis"><span>90 days ago</span><span>Today</span></div>
+                </article>
+
+                <article class="panel donut-panel">
+                  <div class="panel-title"><div><small>CAPABILITIES</small><h2>Sensors Active</h2></div></div>
+                  <div class="health-donut" :style="{'--health': `${(sensorStats.ping / sensorStats.total) * 360 || 0}deg`}">
+                    <div><strong>{{ sensorStats.total }}</strong><small>PROBES</small></div>
+                  </div>
+                  <div class="health-legend"><span><i></i>ICMP Ping <b>{{ sensorStats.ping }}</b></span><span><i style="background:var(--danger)"></i>HTTP/S <b>{{ sensorStats.http }}</b></span></div>
+                </article>
+
+                <article class="panel category-panel">
+                  <div class="panel-title"><div><small>INVENTORY</small><h2>Categories</h2></div></div>
+                  <div class="category-list">
+                    <div v-for="cat in categoryStats" :key="cat.name">
+                      <div class="cat-label"><strong>{{ cat.name }}</strong><span>{{ cat.count }}</span></div>
+                      <div class="cat-bar"><i :style="{ width: `${cat.percent}%` }"></i></div>
+                    </div>
+                  </div>
+                </article>
+
                 <article class="panel device-panel"><div class="panel-title"><div><small>PRIORITY VIEW</small><h2>Device status</h2></div><button @click="go('devices')">View all <ArrowRight :size="13" /></button></div><div class="device-list"><div v-for="device in devices.slice(0,5)" :key="device.name"><span class="device-icon"><Router :size="17" /></span><div><strong>{{ device.name }}</strong><small>{{ device.ip }} · {{ device.category }}</small></div><span :class="['status-pill', {offline: device.ping_status === false}]"><i></i>{{ formatStatus(device) }}</span></div></div></article>
                 <article class="panel events-panel"><div class="panel-title"><div><small>ACTIVITY</small><h2>Recent events</h2></div><button @click="go('logs')">Open stream <ArrowRight :size="13" /></button></div><div class="event-list"><div><span><Check :size="14" /></span><p><b>Health check completed</b><small>All probes responded · just now</small></p></div><div v-if="offlineCount"><span class="error"><X :size="14" /></span><p><b>{{ offlineCount }} device{{ offlineCount > 1 ? 's' : '' }} unreachable</b><small>Escalation policy active · 2m ago</small></p></div><div><span><RefreshCw :size="14" /></span><p><b>Device registry synced</b><small>{{ devices.length }} records verified · 5m ago</small></p></div></div></article>
               </section>
@@ -416,12 +540,81 @@ onBeforeUnmount(() => {
 
             <template v-else-if="route === 'logs'">
               <div class="page-title"><div><small>DIAGNOSTICS</small><h1>Live event stream</h1><p>Raw evidence from every active network check.</p></div><button class="outline-button" @click="exportLogs"><Download :size="15" /> Export CSV</button></div>
-              <section class="terminal-log"><div class="log-head"><span class="live-dot"></span><b>STREAM ACTIVE</b><small>{{ logs.length }} entries buffered</small></div><div class="log-line" v-for="(log,index) in logs" :key="index"><span>{{ log.timestamp }}</span><b :class="{down: log.down}">{{ log.down ? 'FAIL' : 'OK' }}</b><strong>{{ log.device }}</strong><em>PING {{ log.ping || 'N/A' }}</em><em>HTTP {{ log.http || 'N/A' }}</em><small>{{ log.bandwidth || '—' }}</small></div><div v-if="!logs.length" class="empty-state"><TerminalSquare :size="24" /><strong>Waiting for events</strong><span>New monitor results will appear here.</span></div></section>
+              <section class="terminal-log"><div class="log-head"><span class="live-dot"></span><b>STREAM ACTIVE</b><small>{{ logs.length }} entries buffered</small></div><div class="log-line" v-for="(log,index) in logs" :key="index"><span>{{ userSettings.timeFormat === '12h' ? new Date(log.timestamp).toLocaleString('en-US',{hour:'numeric',minute:'numeric',second:'numeric',hour12:true}).split(' ')[0] : log.timestamp.split(' ')[1] }}</span><b :class="{down: log.down}">{{ log.down ? 'FAIL' : 'OK' }}</b><strong>{{ log.device }}</strong><em>PING {{ log.ping || 'N/A' }}</em><em>HTTP {{ log.http || 'N/A' }}</em><small>{{ log.bandwidth || '—' }}</small></div><div v-if="!logs.length" class="empty-state"><TerminalSquare :size="24" /><strong>Waiting for events</strong><span>New monitor results will appear here.</span></div></section>
             </template>
 
-            <template v-else-if="route === 'alerts'">
-              <div class="page-title"><div><small>NOTIFICATIONS</small><h1>Alert routing</h1><p>Put critical changes in front of the right people.</p></div><button class="signal-button compact" @click="saveEmailConfig(false)">Save configuration <Check :size="15" /></button></div>
-              <section class="settings-grid"><article class="panel settings-card"><div class="settings-title"><span><CloudCog :size="19" /></span><div><h2>SMTP gateway</h2><p>Credentials used to deliver alerts.</p></div></div><div class="field-grid"><label>SMTP server<input v-model="emailForm.smtp_server" placeholder="smtp.example.com" /></label><label>Port<input v-model="emailForm.smtp_port" inputmode="numeric" placeholder="587" /></label><label>Username<input v-model="emailForm.smtp_username" autocomplete="username" placeholder="alerts@example.com" /></label><label>Password<input v-model="emailForm.smtp_password" type="password" autocomplete="new-password" placeholder="••••••••" /></label></div></article><article class="panel settings-card"><div class="settings-title"><span><Bell :size="19" /></span><div><h2>Delivery route</h2><p>Sender and recipient for incidents.</p></div></div><div class="field-grid one"><label>From address<input v-model="emailForm.from_email" type="email" placeholder="rustping@example.com" /></label><label>Primary recipient<input v-model="emailForm.to_email" type="email" placeholder="ops@example.com" /></label><label>Test recipient<input v-model="emailForm.test_email" type="email" placeholder="you@example.com" /></label><button class="outline-button" @click="saveEmailConfig(true)">Send test alert <ArrowRight :size="14" /></button></div></article></section>
+            <template v-else-if="route === 'settings'">
+              <div class="page-title"><div><small>PREFERENCES</small><h1>Settings</h1><p>Configure interface options and alert routing.</p></div><button class="signal-button compact" @click="saveEmailConfig(false)">Save configuration <Check :size="15" /></button></div>
+              <section class="settings-grid">
+                <!-- Appearance Settings -->
+                <article class="panel settings-card full-width">
+                  <div class="settings-title"><span><Layout :size="19" /></span><div><h2>Interface & Appearance</h2><p>Customize the console layout and data representation.</p></div></div>
+                  <div class="settings-row">
+                    <div class="setting-item">
+                      <label>Graph Style</label>
+                      <select v-model="userSettings.graphStyle">
+                        <option value="Bar">Bar Chart</option>
+                        <option value="Line">Line Chart</option>
+                        <option value="Area">Area Chart</option>
+                      </select>
+                    </div>
+                    <div class="setting-item">
+                      <label>Data Density</label>
+                      <select v-model="userSettings.density">
+                        <option value="Comfortable">Comfortable</option>
+                        <option value="Compact">Compact</option>
+                      </select>
+                    </div>
+                    <div class="setting-item">
+                      <label>Color Theme</label>
+                      <button class="outline-button" @click="toggleTheme">{{ theme === 'dark' ? 'Dark Mode' : 'Light Mode' }}</button>
+                    </div>
+                  </div>
+                </article>
+
+                <!-- Behavior Settings -->
+                <article class="panel settings-card full-width">
+                  <div class="settings-title"><span><Sliders :size="19" /></span><div><h2>Monitoring Behavior</h2><p>Data polling and formatting preferences.</p></div></div>
+                  <div class="settings-row">
+                    <div class="setting-item">
+                      <label>Poll Interval (ms)</label>
+                      <select v-model="userSettings.refreshRate">
+                        <option :value="5000">5 seconds (Default)</option>
+                        <option :value="10000">10 seconds</option>
+                        <option :value="30000">30 seconds</option>
+                        <option :value="60000">1 minute</option>
+                      </select>
+                    </div>
+                    <div class="setting-item">
+                      <label>Time Format</label>
+                      <select v-model="userSettings.timeFormat">
+                        <option value="24h">24-hour clock</option>
+                        <option value="12h">12-hour clock (AM/PM)</option>
+                      </select>
+                    </div>
+                  </div>
+                </article>
+                
+                <!-- Email Alerts -->
+                <article class="panel settings-card">
+                  <div class="settings-title"><span><CloudCog :size="19" /></span><div><h2>SMTP Gateway</h2><p>Credentials used to deliver alerts.</p></div></div>
+                  <div class="field-grid">
+                    <label>SMTP server<input v-model="emailForm.smtp_server" placeholder="smtp.example.com" /></label>
+                    <label>Port<input v-model="emailForm.smtp_port" inputmode="numeric" placeholder="587" /></label>
+                    <label>Username<input v-model="emailForm.smtp_username" autocomplete="username" placeholder="alerts@example.com" /></label>
+                    <label>Password<input v-model="emailForm.smtp_password" type="password" autocomplete="new-password" placeholder="••••••••" /></label>
+                  </div>
+                </article>
+                <article class="panel settings-card">
+                  <div class="settings-title"><span><Bell :size="19" /></span><div><h2>Delivery Route</h2><p>Sender and recipient for incidents.</p></div></div>
+                  <div class="field-grid one">
+                    <label>From address<input v-model="emailForm.from_email" type="email" placeholder="rustping@example.com" /></label>
+                    <label>Primary recipient<input v-model="emailForm.to_email" type="email" placeholder="ops@example.com" /></label>
+                    <label>Test recipient<input v-model="emailForm.test_email" type="email" placeholder="you@example.com" /></label>
+                    <button class="outline-button" @click="saveEmailConfig(true)">Send test alert <ArrowRight :size="14" /></button>
+                  </div>
+                </article>
+              </section>
             </template>
           </main>
         </div>
