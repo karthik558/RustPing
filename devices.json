@@ -43,42 +43,6 @@
     "http_path": "https://google.com"
   },
   {
-    "name": "Adguard Server [1]",
-    "ip": "94.140.15.16",
-    "category": "DNS Server",
-    "sensors": [
-      "Ping",
-      "Http"
-    ],
-    "http_path": "https://google.com"
-  },
-  {
-    "name": "Adguard Server [2]",
-    "ip": "94.140.14.15",
-    "category": "DNS Server",
-    "sensors": [
-      "Ping",
-      "Http"
-    ],
-    "http_path": "https://google.com"
-  },
-  {
-    "name": "Cisco Virtual Controller",
-    "ip": "8.8.10.8",
-    "category": "Access Point",
-    "sensors": [
-      "Ping"
-    ]
-  },
-  {
-    "name": "NAS",
-    "ip": "196.203.86.4",
-    "category": "Storage Server",
-    "sensors": [
-      "Ping"
-    ]
-  },
-  {
     "name": "CCTV Server",
     "ip": "204.106.240.53",
     "category": "CCTV",

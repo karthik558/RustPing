@@ -1,7 +1,7 @@
-use std::process::Command;
 use log::{info, error, debug};
 use reqwest;
-use tokio::time::{sleep, Duration};
+use tokio::process::Command;
+use tokio::time::{sleep, timeout, Duration};
 
 pub async fn monitor_ping(ip: &str) -> bool {
     debug!("Pinging {}", ip);
@@ -28,8 +28,8 @@ pub async fn monitor_ping(ip: &str) -> bool {
                 .output()
         };
 
-        match output {
-            Ok(output) => {
+        match timeout(Duration::from_secs(3), output).await {
+            Ok(Ok(output)) => {
                 if output.status.success() {
                     success_count += 1;
                     debug!("Ping attempt {} successful for {}", i, ip);
@@ -37,9 +37,21 @@ pub async fn monitor_ping(ip: &str) -> bool {
                     debug!("Ping attempt {} failed for {}", i, ip);
                 }
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 error!("Ping attempt {} error for {}: {}", i, ip, e);
             }
+            Err(_) => error!("Ping attempt {} timed out for {}", i, ip),
+        }
+
+        // Two matching results are decisive; do not wait for a redundant
+        // third process when the device state is already known.
+        if success_count >= 2 {
+            info!("Ping UP for {} ({}/{} successful)", ip, success_count, attempts);
+            return true;
+        }
+        if i - success_count >= 2 {
+            error!("Ping DOWN for {} ({}/{} failed)", ip, i - success_count, attempts);
+            return false;
         }
 
         // Short delay between attempts
@@ -59,8 +71,19 @@ pub async fn monitor_ping(ip: &str) -> bool {
 
 pub async fn monitor_http(url: &str) -> bool {
     debug!("Checking HTTP status for {}", url);
-    
-    match reqwest::get(url).await {
+
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+    {
+        Ok(client) => client,
+        Err(e) => {
+            error!("Failed to create HTTP client: {}", e);
+            return false;
+        }
+    };
+
+    match client.get(url).send().await {
         Ok(response) => {
             let status = response.status();
             let success = status.is_success();

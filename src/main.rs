@@ -120,28 +120,16 @@ type DeviceList = Arc<Mutex<Vec<WebDevice>>>;
 
 static LOG_FILE: &str = "rustPing_running.log";
 
-// Redirect / to /static/index.html (this is now optional, but good for clarity)
+// Serve the Vue monitoring console. Hash routing keeps login and operational
+// views on one resilient entry point while Rocket continues to own the API.
 #[get("/")]
-async fn index() -> Redirect {
-    Redirect::to("/static/login.html")
+async fn index() -> Option<NamedFile> {
+    NamedFile::open(Path::new("static/app/index.html")).await.ok()
 }
 
 #[get("/login")]
 async fn login_page() -> Option<NamedFile> {
-    NamedFile::open(Path::new("static/login.html")).await.ok()
-}
-
-// API to add a device.
-#[post("/add_device", data = "<device>")]
-async fn add_model_device(device: Json<ModelDevice>, devices: &State<SharedDevices>) -> &'static str {
-    let mut dev = device.into_inner();
-    if dev.sensors.contains(&SensorType::Ping) {
-        let status = monitor_ping(&dev.ip).await;
-        dev.ping_status = Some(status);
-    }
-    let mut devices_locked = devices.lock().await;
-    devices_locked.push(dev);
-    "Device added"
+    NamedFile::open(Path::new("static/app/index.html")).await.ok()
 }
 
 // API to get the list of devices.
@@ -348,12 +336,6 @@ async fn add_devices_from_file(file_path: &str, devices: SharedDevices) {
     devices_locked.append(&mut file_devices);
 }
 
-/// New route for failed logs.
-#[get("/failed_logs")]
-async fn failed_logs() -> Option<NamedFile> {
-    NamedFile::open(Path::new("static/failed_logs.html")).await.ok()
-}
-
 // Add this struct for authentication
 struct Auth;
 
@@ -381,53 +363,7 @@ impl<'r> FromRequest<'r> for Auth {
 // Add catch handler for unauthorized requests
 #[catch(401)]
 fn unauthorized() -> Redirect {
-    Redirect::to("/static/login.html")
-}
-
-// Protected routes
-#[get("/static/index.html")]
-async fn protected_index(_auth: Auth) -> Option<NamedFile> {
-    NamedFile::open(Path::new("static/index.html")).await.ok()
-}
-
-#[get("/static/failed_logs.html")]
-async fn protected_failed_logs(_auth: Auth) -> Option<NamedFile> {
-    NamedFile::open(Path::new("static/failed_logs.html")).await.ok()
-}
-
-#[get("/static/log_view.html")]
-async fn protected_log_view(_auth: Auth) -> Option<NamedFile> {
-    NamedFile::open(Path::new("static/log_view.html")).await.ok()
-}
-
-#[get("/static/password-manager.html")]
-async fn protected_password(_auth: Auth) -> Option<NamedFile> {
-    NamedFile::open(Path::new("static/password-manager.html")).await.ok()
-}
-
-#[get("/static/manage-devices.html")]
-async fn manage_device(_auth: Auth) -> Option<NamedFile> {
-    NamedFile::open(Path::new("static/manage-devices.html")).await.ok()
-}
-
-#[derive(Deserialize)]
-struct PasswordUpdate {
-    hash: String,
-}
-
-#[post("/update-password", data = "<update>")]
-async fn update_password(_auth: Auth, update: Json<PasswordUpdate>) -> Status {
-    // Update the password hash in config.js
-    let config_path = Path::new("static/config.js");
-    let config_content = format!(
-        "const AUTH_CONFIG = {{\n    username: 'admin',\n    passwordHash: '{}'\n}};",
-        update.hash
-    );
-    
-    match fs::write(config_path, config_content) {
-        Ok(_) => Status::Ok,
-        Err(_) => Status::InternalServerError,
-    }
+    Redirect::to("/#/login")
 }
 
 // Web Device struct - this is separate from the model Device
@@ -760,44 +696,6 @@ async fn send_test_email(
     }
 }
 
-#[get("/static/email_config.html")]
-async fn email_config_page(_auth: Auth) -> Option<NamedFile> {
-    NamedFile::open(Path::new("static/email_config.html")).await.ok()
-}
-
-#[post("/update-config", data = "<data>")]
-async fn update_config(data: Json<serde_json::Value>) -> Status {
-    if let Some(content) = data.get("content").and_then(|c| c.as_str()) {
-        let config_path = Path::new("static/config.js");
-        match fs::write(config_path, content) {
-            Ok(_) => {
-                // Also update the in-memory AUTH_CONFIG
-                if let Ok(config_content) = content.parse::<String>() {
-                    if let Some(config_str) = config_content.strip_prefix("const AUTH_CONFIG = ") {
-                        if let Ok(config) = serde_json::from_str::<Value>(config_str) {
-                            // Update the global AUTH_CONFIG
-                            let new_config = Box::new(config);
-                            let old_ptr = AUTH_CONFIG.swap(Box::into_raw(new_config), Ordering::SeqCst);
-                            if !old_ptr.is_null() {
-                                unsafe {
-                                    drop(Box::from_raw(old_ptr));
-                                }
-                            }
-                        }
-                    }
-                }
-                Status::Ok
-            }
-            Err(e) => {
-                eprintln!("Error updating config file: {}", e);
-                Status::InternalServerError
-            }
-        }
-    } else {
-        Status::BadRequest
-    }
-}
-
 #[tokio::main]
 async fn main() {
     // Initialize AUTH_CONFIG
@@ -819,25 +717,15 @@ async fn main() {
         .mount("/", routes![
             index,
             login_page,
-            protected_index,
-            protected_failed_logs,
-            protected_log_view,
-            add_model_device,
             get_devices,
             export_log,
             logs_json,
-            failed_logs,
-            protected_password,
-            update_password,
             add_web_device,
             delete_web_device,
-            manage_device,
             update_device,
             get_email_config,
             update_email_config,
             send_test_email,
-            email_config_page,
-            update_config,
         ])
         .register("/", catchers![unauthorized]);
 
@@ -861,8 +749,12 @@ async fn main() {
 
     tokio::spawn(async move {
         let mut device_statuses: HashMap<String, DeviceStatus> = HashMap::new();
+        let mut monitor_interval = tokio::time::interval(Duration::from_secs(5));
+        monitor_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         
         loop {
+            monitor_interval.tick().await;
+
             let devices_to_monitor: Vec<ModelDevice> = {
                 let locked = devices_clone.lock().await;
                 locked.clone()
@@ -870,52 +762,53 @@ async fn main() {
 
             let mut status_changed = false;
 
-            for dev in devices_to_monitor {
+            // Network probes run concurrently and never hold the shared device
+            // lock. This keeps the API responsive even when a target is slow.
+            let check_results = futures::future::join_all(
+                devices_to_monitor.into_iter().map(|dev| async move {
+                    let ping_result = monitor_ping(&dev.ip).await;
+                    let has_http_sensor = dev.sensors.contains(&SensorType::Http)
+                        || dev.sensors.contains(&SensorType::Https);
+
+                    let (http_status, bandwidth_usage) = if ping_result && has_http_sensor {
+                        if let Some(ref url) = dev.http_path {
+                            if monitor_http(url).await {
+                                (Some(true), Some(rand::thread_rng().gen_range(10.0..1000.0)))
+                            } else {
+                                (Some(false), None)
+                            }
+                        } else {
+                            (Some(false), None)
+                        }
+                    } else if has_http_sensor {
+                        (Some(false), None)
+                    } else {
+                        (None, None)
+                    };
+
+                    (dev, ping_result, http_status, bandwidth_usage)
+                })
+            ).await;
+
+            let mut devices_locked = devices_clone.lock().await;
+            for (dev, ping_result, http_status, bandwidth_usage) in check_results {
                 let status = device_statuses.entry(dev.ip.clone())
                     .or_insert_with(DeviceStatus::new);
                 
-                // First check ping
-                let ping_result = monitor_ping(&dev.ip).await;
                 if status.update_ping(ping_result) {
                     status_changed = true;
                 }
 
-                // Update device in shared state
-                let mut devices_locked = devices_clone.lock().await;
                 if let Some(device) = devices_locked.iter_mut().find(|d| d.ip == dev.ip) {
-                    device.ping_status = status.ping_status;
-                    
-                    // Check HTTP and bandwidth if configured and ping is successful
-                    if device.ping_status == Some(true) {
-                        if device.sensors.contains(&SensorType::Http) || 
-                           device.sensors.contains(&SensorType::Https) {
-                            if let Some(ref url) = device.http_path {
-                                match monitor_http(url).await {
-                                    true => {
-                                        device.http_status = Some(true);
-                                        // Simulate bandwidth measurement only for successful HTTP connections
-                                        device.bandwidth_usage = Some(rand::thread_rng().gen_range(10.0..1000.0));
-                                        status_changed = true;
-                                    },
-                                    false => {
-                                        device.http_status = Some(false);
-                                        device.bandwidth_usage = None;
-                                        status_changed = true;
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        // If ping fails, mark HTTP as down and clear bandwidth
-                        if device.sensors.contains(&SensorType::Http) || 
-                           device.sensors.contains(&SensorType::Https) {
-                            device.http_status = Some(false);
-                            device.bandwidth_usage = None;
-                            status_changed = true;
-                        }
+                    if device.ping_status != Some(ping_result) || device.http_status != http_status {
+                        status_changed = true;
                     }
+                    device.ping_status = Some(ping_result);
+                    device.http_status = http_status;
+                    device.bandwidth_usage = bandwidth_usage;
                 }
             }
+            drop(devices_locked);
 
             // Write to log file when status changes
             if status_changed {
@@ -984,7 +877,6 @@ async fn main() {
                 }
             }
 
-            sleep(Duration::from_secs(5)).await;
         }
     });
 

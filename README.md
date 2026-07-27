@@ -1,5 +1,10 @@
 # 🚀 RustPing: Real-time Network Monitoring
 
+RustPing 2.0 pairs its Rust monitoring engine with a professional Vue 3
+operations console. The unified frontend includes authentication, a live
+dashboard, device inventory, event stream, and alert configuration in one
+responsive application.
+
 [![Rust](https://img.shields.io/badge/Rust-1.56+-orange.svg?style=for-the-badge&logo=rust)](https://www.rust-lang.org/)
 [![Rocket](https://img.shields.io/badge/Rocket-0.5+-red.svg?style=for-the-badge&logo=rocket)](https://rocket.rs/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
@@ -79,14 +84,21 @@ These features are planned for future development:
     cd Rust-Ping
     ```
 
-2.  **Build the Project (Release Mode):**
+2.  **Install and build the Vue interface:**
+
+    ```bash
+    npm install
+    npm run build
+    ```
+
+3.  **Build the Rust service (Release Mode):**
 
     ```bash
     cargo build --release
     ```
     This creates an optimized executable in the `target/release` directory.
 
-3.  **Run the Application:**
+4.  **Run the application:**
 
     ```bash
     ./target/release/Rust-Ping  # Run the compiled executable directly
@@ -96,7 +108,7 @@ These features are planned for future development:
      cargo run
     ```
 
-4.  **Access the Dashboard:** Open your web browser and navigate to `http://127.0.0.1:8000/static/index.html`.
+5. **Access RustPing:** Open `http://127.0.0.1:8000/`.
 
 ### Installation (Windows)
 
