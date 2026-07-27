@@ -12,7 +12,7 @@ const brandLogo = '/static/app/rustping-logo.png'
 const brandIcon = '/static/app/favicon.png'
 const route = ref(window.location.hash.replace('#/', '') || 'login')
 const theme = ref(localStorage.getItem('rustping-theme') || 'dark')
-const currentUser = ref(JSON.parse(localStorage.getItem('currentUser') || 'null'))
+const currentUser = ref(JSON.parse(sessionStorage.getItem('currentUser') || 'null'))
 const devices = ref([])
 const logs = ref([])
 const loading = ref(false)
@@ -29,6 +29,7 @@ const emailForm = reactive({
   from_email: '', to_email: '', test_email: ''
 })
 let refreshTimer
+let inactivityTimer
 
 const sampleDevices = [
   { name: 'Core Gateway', ip: '10.0.0.1', category: 'Network', sensors: ['Ping', 'Http'], ping_status: true, http_status: true, bandwidth_usage: 84.2 },
@@ -140,16 +141,18 @@ async function login() {
   }
   const user = match || { username: 'admin', role: 'admin' }
   currentUser.value = { username: user.username, role: user.role || 'admin', lastLogin: new Date().toISOString() }
-  localStorage.setItem('currentUser', JSON.stringify(currentUser.value))
+  sessionStorage.setItem('currentUser', JSON.stringify(currentUser.value))
   document.cookie = 'auth=true; path=/; SameSite=Lax'
   await loadDevices()
   go('dashboard')
+  resetInactivityTimer()
 }
 
 function logout() {
   currentUser.value = null
-  localStorage.removeItem('currentUser')
+  sessionStorage.removeItem('currentUser')
   document.cookie = 'auth=; Max-Age=0; path=/; SameSite=Lax'
+  if (inactivityTimer) window.clearTimeout(inactivityTimer)
   go('home')
 }
 
@@ -232,16 +235,44 @@ watch(route, async next => {
   if (next === 'alerts') await loadEmailConfig()
 })
 
+function resetInactivityTimer() {
+  if (inactivityTimer) window.clearTimeout(inactivityTimer)
+  if (isAuthenticated.value) {
+    inactivityTimer = window.setTimeout(() => {
+      logout()
+      flash('Session expired due to inactivity.')
+    }, 2 * 60 * 1000)
+  }
+}
+
+function handleActivity() {
+  if (isAuthenticated.value) {
+    resetInactivityTimer()
+  }
+}
+
 onMounted(() => {
   window.addEventListener('hashchange', handleHash)
   handleHash()
-  if (isAuthenticated.value) loadDevices()
+  if (isAuthenticated.value) {
+    loadDevices()
+    resetInactivityTimer()
+  }
   refreshTimer = window.setInterval(() => isApp.value && isAuthenticated.value && loadDevices(), 5000)
+  
+  window.addEventListener('mousemove', handleActivity)
+  window.addEventListener('keydown', handleActivity)
+  window.addEventListener('click', handleActivity)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('hashchange', handleHash)
   window.clearInterval(refreshTimer)
+  
+  window.removeEventListener('mousemove', handleActivity)
+  window.removeEventListener('keydown', handleActivity)
+  window.removeEventListener('click', handleActivity)
+  if (inactivityTimer) window.clearTimeout(inactivityTimer)
 })
 </script>
 
