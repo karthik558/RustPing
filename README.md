@@ -12,6 +12,40 @@
 
 ---
 
+## Screenshots
+
+### Operations Dashboard
+| Dark Mode | Light Mode |
+| :---: | :---: |
+| <img src="screenshots/dashboardHome-dark.png" width="500" alt="Dashboard Dark" /> | <img src="screenshots/dashboardHome-light.png" width="500" alt="Dashboard Light" /> |
+
+### Network Topology Map
+| Dark Mode | Light Mode |
+| :---: | :---: |
+| <img src="screenshots/topology-dark.png" width="500" alt="Topology Dark" /> | <img src="screenshots/topology-light.png" width="500" alt="Topology Light" /> |
+
+### SLA & Analytics Reports
+| Dark Mode | Light Mode |
+| :---: | :---: |
+| <img src="screenshots/reports-dark.png" width="500" alt="Reports Dark" /> | <img src="screenshots/reports-light.png" width="500" alt="Reports Light" /> |
+
+### Device Inventory & Management
+| Dark Mode | Light Mode |
+| :---: | :---: |
+| <img src="screenshots/devDashBoard-dark.png" width="500" alt="Devices Dark" /> | <img src="screenshots/devDashBoard-light.png" width="500" alt="Devices Light" /> |
+
+### Diagnostic Event Stream
+| Dark Mode | Light Mode |
+| :---: | :---: |
+| <img src="screenshots/liveLog-dark.png" width="500" alt="Event Stream Dark" /> | <img src="screenshots/liveLog-light.png" width="500" alt="Event Stream Light" /> |
+
+### Authentication Console
+| Dark Mode | Light Mode |
+| :---: | :---: |
+| <img src="screenshots/loginDark.png" width="500" alt="Login Dark" /> | <img src="screenshots/loginLight.png" width="500" alt="Login Light" /> |
+
+---
+
 ## Key Features
 
 * **High-Performance Engine:** Multi-threaded asynchronous sensor checks handling thousands of probes per second with minimal CPU and memory utilization.
@@ -31,19 +65,6 @@
 * **Alerting & Webhook Integrations:** Configurable alert routing supporting Slack, Microsoft Teams, PagerDuty, and SMTP Email dispatching.
 * **Parent Dependency Trees:** Prevents alert cascades by suppressing child device notifications when a parent router or switch becomes unreachable.
 * **Dual Console Themes:** Seamless switching between Dark Mode and Light Mode.
-
----
-
-## Screenshots
-
-| View | Dark Mode | Light Mode |
-| :--- | :--- | :--- |
-| **Login Console** | ![Login Dark](screenshots/loginDark.png) | ![Login Light](screenshots/loginLight.png) |
-| **Live Operations Dashboard** | ![Dashboard Dark](screenshots/dashboardHome-dark.png) | ![Dashboard Light](screenshots/dashboardHome-light.png) |
-| **Device Inventory & Management** | ![Devices Dark](screenshots/devDashBoard-dark.png) | ![Devices Light](screenshots/devDashBoard-light.png) |
-| **Network Topology Map** | ![Topology Dark](screenshots/topology-dark.png) | ![Topology Light](screenshots/topology-light.png) |
-| **SLA & Analytics Reports** | ![Reports Dark](screenshots/reports-dark.png) | ![Reports Light](screenshots/reports-light.png) |
-| **Live Diagnostic Event Stream** | ![Event Stream Dark](screenshots/liveLog-dark.png) | ![Event Stream Light](screenshots/liveLog-light.png) |
 
 ---
 
