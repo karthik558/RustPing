@@ -5,7 +5,7 @@ import {
   CloudCog, Database, Download, FileClock, Gauge, LayoutDashboard, LogOut,
   Menu, Moon, Network, Plus, Radio, RefreshCw, Router, Search, Server, ShieldCheck,
   Signal, Sun, TerminalSquare, Trash2, X, Zap, Settings, Sliders, Layout, Clock,
-  PieChart, Wifi, Users
+  PieChart, Wifi, Users, Pencil
 } from 'lucide-vue-next'
 
 const appRoutes = ['dashboard', 'devices', 'logs', 'settings', 'users']
