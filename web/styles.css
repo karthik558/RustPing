@@ -13,6 +13,10 @@
   --lime: #cfff33;
   --paper: #f0eee7;
   --danger: #ff675f;
+  --accent: #cfff33;
+  --blue: #38bdf8;
+  --green: #22c55e;
+  --red: #ff675f;
 }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; background: var(--ink); }
@@ -42,6 +46,17 @@ a { color: inherit; text-decoration: none; }
 .hero h1 em, .auth-copy h1 em { color: var(--lime); font-style: normal; }
 .hero-grid > div:first-child > p { width: min(470px, 100%); color: var(--muted-2); font-size: 13px; line-height: 1.7; margin: 28px 0; }
 .hero-actions { display: flex; align-items: center; gap: 24px; }
+
+@media print {
+  body, html { background: #ffffff !important; color: #000000 !important; }
+  .app-sidebar, .app-topbar, .page-title button, .table-tools { display: none !important; }
+  .app-body { padding: 0 !important; overflow: visible !important; }
+  #print-area { display: block !important; }
+  .print-header { display: flex !important; margin-bottom: 30px !important; }
+  .panel { border: 1px solid #ddd !important; break-inside: avoid; }
+  .chart-container polygon { opacity: 0.1 !important; }
+}
+
 .text-link { color: #b2b8b3; display: inline-flex; align-items: center; gap: 5px; font-size: 11px; }
 .build-meta { display: flex; margin-top: 58px; border-top: 1px solid var(--line); width: min(520px, 100%); }
 .build-meta div { padding: 16px 28px 0 0; margin-right: 28px; }
@@ -152,6 +167,8 @@ input[type="checkbox"]{accent-color:var(--lime);cursor:pointer}
   --ink:#f1f2ec;
   --surface:#fbfcf7;
   --line:#c9cec4;
+  --accent:#587400;
+  --blue:#0284c7;
   color:#151a15;
   background:#f1f2ec;
 }
@@ -232,7 +249,31 @@ input[type="checkbox"]{accent-color:var(--lime);cursor:pointer}
 .settings-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-top: 15px; }
 .setting-item { display: flex; flex-direction: column; gap: 8px; }
 .setting-item label { color: #889289; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
-.setting-item select, .setting-item button { padding: 8px 12px; border-radius: 4px; background: #1a201b; border: 1px solid #303831; color: #e4e7e3; font-family: inherit; font-size: 13px; cursor: pointer; outline: none; }
+.setting-item input[type="number"], .setting-item select { padding: 8px 12px; border-radius: 6px; background: rgba(0,0,0,0.2); border: 1px solid var(--border); color: var(--text); outline: none; width: 140px; }
+
+/* Topology Map */
+.topology-container { display: flex; flex-direction: column; gap: 20px; margin-top: 20px; padding: 20px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: auto; min-height: 400px; }
+.theme-light .topology-container { background: #fbfcf7; border-color: #d1d6ce; }
+.topo-node { position: relative; }
+.topo-card { display: inline-flex; align-items: center; gap: 8px; padding: 10px 15px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; font-weight: 500; font-size: 13px; position: relative; z-index: 2; }
+.theme-light .topo-card { background: #ffffff; border-color: #bfc5ba; color: #171d17; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+.topo-card em { font-size: 10px; padding: 2px 6px; border-radius: 4px; font-style: normal; }
+.topo-children { padding-left: 40px; border-left: 2px solid var(--border); margin-left: 10px; margin-top: 10px; }
+.theme-light .topo-children { border-color: #d1d6ce; }
+.topo-children .topo-node { margin-bottom: 10px; }
+.topo-children .topo-node::before { content: ''; position: absolute; left: -30px; top: 18px; width: 30px; border-top: 2px solid var(--border); }
+.theme-light .topo-children .topo-node::before { border-color: #d1d6ce; }
+
+/* Reports Charts */
+.report-panel { padding: 22px; min-height: 260px; }
+.chart-container { width: 100%; height: 160px; margin-top: 15px; position: relative; }
+.chart-container svg { width: 100%; height: 100%; overflow: visible; }
+.stat-list { display: flex; flex-direction: column; gap: 12px; margin-top: 15px; }
+.stat-row { display: flex; align-items: center; justify-content: space-between; font-size: 13px; }
+.stat-row span { width: 100px; color: var(--muted); }
+.stat-bar { flex: 1; height: 6px; background: rgba(255,255,255,0.05); border-radius: 3px; margin: 0 15px; overflow: hidden; }
+.stat-bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.stat-row b { font-weight: 600; }
 .setting-item select:focus { border-color: var(--lime); }
 .theme-light .setting-item select { background: #fff; color: #171d17; border-color: #bfc6bb; }
 .theme-light .setting-item label { color: #59635a; }

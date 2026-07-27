@@ -1,14 +1,14 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, nextTick } from 'vue'
 import {
   Activity, ArrowRight, Bell, Check, ChevronDown, ChevronRight, CircleGauge,
   CloudCog, Database, Download, FileClock, Gauge, LayoutDashboard, LogOut,
   Menu, Moon, Network, Plus, Radio, RefreshCw, Router, Search, Server, ShieldCheck,
   Signal, Sun, TerminalSquare, Trash2, X, Zap, Settings, Sliders, Layout, Clock,
-  PieChart, Wifi, Users, Pencil
+  PieChart, Wifi, Users, Pencil, Map, BarChart2, Webhook, Eraser
 } from 'lucide-vue-next'
 
-const appRoutes = ['dashboard', 'devices', 'logs', 'settings', 'users']
+const appRoutes = ['dashboard', 'devices', 'map', 'reports', 'integrations', 'logs', 'settings', 'users']
 const brandLogo = '/static/app/rustping-logo.png'
 const brandIcon = '/static/app/favicon.png'
 const route = ref(window.location.hash.replace('#/', '') || 'login')
@@ -143,8 +143,117 @@ const filteredLogs = computed(() => {
       l.timestamp.toLowerCase().includes(term)
     );
   }
-  return result;
+  return result.slice().reverse();
 })
+
+const deviceTree = computed(() => {
+  const nodes = devices.value.map(d => ({ ...d, children: [] }));
+  const roots = [];
+  nodes.forEach(node => {
+    if (node.parent_device) {
+      const parent = nodes.find(n => n.name === node.parent_device);
+      if (parent) parent.children.push(node);
+      else roots.push(node);
+    } else {
+      roots.push(node);
+    }
+  });
+  return roots;
+});
+
+const mapView = ref('ring')
+
+const mappedTopologyNodes = computed(() => {
+  const list = devices.value
+  const total = list.length
+  if (!total) return { nodes: [], links: [], center: null }
+
+  const width = 800
+  const height = 480
+  const cx = width / 2
+  const cy = height / 2
+
+  if (mapView.value === 'ring') {
+    const radius = Math.min(cx, cy) - 90
+    const nodes = list.map((d, i) => {
+      const angle = (i / total) * 2 * Math.PI - Math.PI / 2
+      return { ...d, x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle) }
+    })
+    const links = nodes.map((n, i) => ({
+      x1: n.x, y1: n.y,
+      x2: nodes[(i + 1) % total].x, y2: nodes[(i + 1) % total].y
+    }))
+    return { nodes, links, center: { x: cx, y: cy, label: 'CORE RING' } }
+  } else if (mapView.value === 'star') {
+    const radius = Math.min(cx, cy) - 90
+    const nodes = list.map((d, i) => {
+      const angle = (i / total) * 2 * Math.PI - Math.PI / 2
+      return { ...d, x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle) }
+    })
+    const links = nodes.map(n => ({
+      x1: cx, y1: cy,
+      x2: n.x, y2: n.y
+    }))
+    return { nodes, links, center: { x: cx, y: cy, label: 'CENTRAL HUB' } }
+  } else if (mapView.value === 'grid') {
+    const cols = Math.ceil(Math.sqrt(total))
+    const rows = Math.ceil(total / cols)
+    const cellW = (width - 160) / Math.max(cols - 1, 1)
+    const cellH = (height - 140) / Math.max(rows - 1, 1)
+    const startX = 80
+    const startY = 70
+
+    const nodes = list.map((d, i) => {
+      const col = i % cols
+      const row = Math.floor(i / cols)
+      return { ...d, x: startX + col * cellW, y: startY + row * cellH }
+    })
+    const links = []
+    nodes.forEach((n, i) => {
+      if ((i + 1) % cols !== 0 && i + 1 < total) {
+        links.push({ x1: n.x, y1: n.y, x2: nodes[i + 1].x, y2: nodes[i + 1].y })
+      }
+      if (i + cols < total) {
+        links.push({ x1: n.x, y1: n.y, x2: nodes[i + cols].x, y2: nodes[i + cols].y })
+      }
+    })
+    return { nodes, links, center: null }
+  } else {
+    // Tree view
+    const roots = deviceTree.value
+    const nodes = []
+    const links = []
+    const rootCount = roots.length
+    roots.forEach((root, i) => {
+      const rx = (width / (rootCount + 1)) * (i + 1)
+      const ry = 80
+      nodes.push({ ...root, x: rx, y: ry })
+      if (root.children && root.children.length) {
+        const childCount = root.children.length
+        root.children.forEach((child, j) => {
+          const cxPos = rx - 60 + (120 / Math.max(childCount - 1, 1)) * j
+          const cyPos = 240
+          nodes.push({ ...child, x: cxPos, y: cyPos })
+          links.push({ x1: rx, y1: ry, x2: cxPos, y2: cyPos })
+        })
+      }
+    })
+    return { nodes, links, center: null }
+  }
+})
+
+async function printReport() {
+  const oldTheme = theme.value;
+  theme.value = 'light';
+  localStorage.setItem('rustping-theme', 'light');
+  await nextTick();
+  // Small delay to ensure CSS variables transition
+  setTimeout(() => {
+    window.print();
+    theme.value = oldTheme;
+    localStorage.setItem('rustping-theme', oldTheme);
+  }, 100);
+}
 
 function go(next) {
   if (next === 'home') next = isAuthenticated.value ? 'dashboard' : 'login'
@@ -191,6 +300,22 @@ async function loadLogs() {
       { timestamp: '2026-07-27 17:11:19', device: 'Office Gateway', ping: 'FAIL', http: 'FAIL', bandwidth: '12.1 Mbps', down: true },
       { timestamp: '2026-07-27 17:11:14', device: 'Primary NAS', ping: 'OK', http: 'N/A', bandwidth: '46.4 Mbps', down: false },
     ]
+  }
+}
+
+async function clearLogs() {
+  if (!window.confirm("Are you sure you want to clear the entire event stream?")) return;
+  try {
+    const response = await fetch('/logs', { method: 'DELETE' });
+    if (response.ok) {
+      logs.value = [];
+      flash('Event stream cleared.');
+    } else {
+      flash('Failed to clear logs.');
+    }
+  } catch {
+    logs.value = [];
+    flash('Event stream cleared (preview mode).');
   }
 }
 
@@ -574,13 +699,22 @@ onBeforeUnmount(() => {
           <nav>
             <button :class="{active: route === 'dashboard'}" @click="go('dashboard')"><LayoutDashboard :size="18" />Overview</button>
             <button :class="{active: route === 'devices'}" @click="go('devices')"><Server :size="18" />Devices <b>{{ devices.length }}</b></button>
+            <button :class="{active: route === 'map'}" @click="go('map')"><Map :size="18" />Topology Map</button>
+            <button :class="{active: route === 'reports'}" @click="go('reports')"><BarChart2 :size="18" />Reports</button>
             <button v-if="currentUser?.permissions?.view_logs" :class="{active: route === 'logs'}" @click="go('logs')"><TerminalSquare :size="18" />Event stream</button>
             <button v-if="currentUser?.permissions?.manage_settings" :class="{active: route === 'settings'}" @click="go('settings')"><Settings :size="18" />Settings</button>
+            <button v-if="currentUser?.permissions?.manage_settings" :class="{active: route === 'integrations'}" @click="go('integrations')"><Webhook :size="18" />Integrations</button>
             <button v-if="currentUser?.permissions?.manage_users" :class="{active: route === 'users'}" @click="go('users')"><Users :size="18" />Operators</button>
           </nav>
           <div class="side-bottom"><button @click="toggleTheme"><Sun v-if="theme === 'dark'" :size="17" /><Moon v-else :size="17" />{{ theme === 'dark' ? 'Light' : 'Dark' }} mode</button><button @click="logout"><LogOut :size="17" />Sign out</button><div class="operator"><span>{{ currentUser?.username?.slice(0,1).toUpperCase() }}</span><div><strong>{{ currentUser?.username }}</strong><small>{{ currentUser?.role }} operator</small></div></div></div>
         </aside>
         <div class="app-body">
+          <svg width="0" height="0" style="position:absolute">
+            <defs>
+              <linearGradient id="chartGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#38bdf8" stop-opacity="0.8"/><stop offset="100%" stop-color="#38bdf8" stop-opacity="0.0"/></linearGradient>
+              <linearGradient id="latencyGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#cfff33" stop-opacity="0.8"/><stop offset="100%" stop-color="#cfff33" stop-opacity="0.0"/></linearGradient>
+            </defs>
+          </svg>
           <header class="app-topbar"><button class="mobile-toggle" aria-label="Toggle navigation" @click="mobileMenu = !mobileMenu"><Menu :size="20" /></button><div class="app-breadcrumb"><span>RUSTPING</span><ChevronRight :size="13" /><b>{{ route }}</b></div><div class="top-actions"><span class="engine-status"><i></i> Engine online</span><button aria-label="Refresh data" @click="refreshData"><RefreshCw :class="{spin: loading}" :size="17" /></button><button aria-label="Notifications" @click="go('devices'); statusFilter = 'offline'"><Bell :size="17" /><i v-if="offlineCount"></i></button></div></header>
           <main class="app-content">
             <template v-if="route === 'dashboard'">
@@ -676,8 +810,129 @@ onBeforeUnmount(() => {
               <section class="data-table"><div class="table-row table-head"><span>Device</span><span>Address</span><span>Category</span><span>Sensors</span><span>Status</span><span style="display:flex;justify-content:flex-end;"></span></div><div v-for="device in filteredDevices" :key="device.ip" class="table-row"><span class="device-cell"><i :class="{offline: device.ping_status === 'Down', unreachable: device.ping_status === 'Unreachable'}"></i><b>{{ device.name }}</b></span><span class="mono">{{ device.ip }}</span><span>{{ device.category }}</span><span class="sensor-list"><b v-for="sensor in device.sensors" :key="sensor">{{ sensor }}</b></span><span><em :class="['status-pill', {offline: device.ping_status === 'Down', unreachable: device.ping_status === 'Unreachable'}]"><i></i>{{ formatStatus(device) }}</em></span><span style="display:flex;justify-content:flex-end;gap:5px;"><button v-if="currentUser?.permissions?.manage_devices" class="icon-button" :aria-label="`Edit ${device.name}`" @click="editDevice(device)"><Pencil :size="15" /></button><button v-if="currentUser?.permissions?.manage_devices" class="icon-button danger-button" :aria-label="`Delete ${device.name}`" @click="deleteDevice(device)"><Trash2 :size="15" /></button></span></div><div v-if="!filteredDevices.length" class="empty-state"><Search :size="24" /><strong>No devices found</strong><span>Try another search or filter.</span></div></section>
             </template>
 
+            <template v-else-if="route === 'map'">
+              <div class="page-title">
+                <div><small>TOPOLOGY</small><h1>Network Map</h1><p>Visual relationship of monitored infrastructure.</p></div>
+                <div class="table-tools" style="padding:0; background:transparent;">
+                  <div>
+                    <button :class="{active: mapView === 'ring'}" @click="mapView = 'ring'">Ring</button>
+                    <button :class="{active: mapView === 'star'}" @click="mapView = 'star'">Star Hub</button>
+                    <button :class="{active: mapView === 'grid'}" @click="mapView = 'grid'">Grid Mesh</button>
+                    <button :class="{active: mapView === 'tree'}" @click="mapView = 'tree'">Tree</button>
+                  </div>
+                </div>
+              </div>
+              <section class="dashboard-grid" style="margin-top: 20px">
+                <article class="panel report-panel" style="grid-column: span 3; height: 500px; position: relative; overflow: hidden; padding: 0;">
+                  <svg viewBox="0 0 800 480" style="position: absolute; width: 100%; height: 100%; top: 0; left: 0; pointer-events: none; z-index: 1;">
+                    <line 
+                      v-for="(link, i) in mappedTopologyNodes.links" 
+                      :key="i"
+                      :x1="link.x1" 
+                      :y1="link.y1" 
+                      :x2="link.x2" 
+                      :y2="link.y2" 
+                      stroke="var(--accent)" 
+                      stroke-width="1.5" 
+                      opacity="0.4"
+                      stroke-dasharray="4 4"
+                    />
+                  </svg>
+
+                  <div 
+                    v-if="mappedTopologyNodes.center" 
+                    :style="{ position: 'absolute', left: (mappedTopologyNodes.center.x / 8) + '%', top: (mappedTopologyNodes.center.y / 4.8) + '%', transform: 'translate(-50%, -50%)', zIndex: 3 }"
+                  >
+                    <div class="topo-card center-card" style="padding: 10px 16px; background: var(--panel); border: 2px solid var(--accent); font-weight: 700;">
+                      <Network :size="18" style="color: var(--accent)" />
+                      <span>{{ mappedTopologyNodes.center.label }}</span>
+                    </div>
+                  </div>
+
+                  <div 
+                    v-for="node in mappedTopologyNodes.nodes" 
+                    :key="node.ip" 
+                    class="ring-node"
+                    :style="{ position: 'absolute', left: (node.x / 8) + '%', top: (node.y / 4.8) + '%', transform: 'translate(-50%, -50%)', zIndex: 2 }"
+                  >
+                    <div class="topo-card">
+                      <Server :size="15" />
+                      <span>{{ node.name }}</span>
+                      <em :class="['status-pill', {offline: node.ping_status === 'Down', unreachable: node.ping_status === 'Unreachable'}]"><i></i>{{ formatStatus(node) }}</em>
+                    </div>
+                  </div>
+
+                  <div v-if="!mappedTopologyNodes.nodes.length" class="empty-state" style="padding-top: 180px;">
+                    <Map :size="32" style="margin-bottom: 15px; opacity: 0.5" />
+                    <strong>No devices found</strong>
+                    <span>Add devices to see them linked in the graph.</span>
+                  </div>
+                </article>
+              </section>
+            </template>
+
+            <template v-else-if="route === 'reports'">
+              <div class="page-title"><div><small>ANALYTICS</small><h1>SLA & Reports</h1><p>Performance tracking and historical uptime metrics.</p></div><button class="outline-button" @click="printReport"><Download :size="15" /> Download PDF</button></div>
+              <div id="print-area">
+                <div class="print-header" style="display: none; padding: 20px; align-items: center; gap: 15px; border-bottom: 1px solid var(--border); margin-bottom: 20px;">
+                   <img :src="brandLogo" style="height: 40px" />
+                   <div><h2 style="margin: 0; font-size: 24px; color: var(--text)">RustPing Network Report</h2><p style="margin: 0; color: var(--muted); font-size: 12px;">Generated: {{ new Date().toLocaleString() }}</p></div>
+                </div>
+                <section class="dashboard-grid" style="margin-top: 20px">
+                  <article class="panel uptime-panel report-panel" style="grid-column: span 3">
+                    <div class="panel-title"><div><small>RELIABILITY</small><h2>Service Level Agreement (30 Days)</h2></div><span>99.9%</span></div>
+                    <div class="uptime-heatmap">
+                      <div v-for="(up, index) in uptimeHistory" :key="index" :class="['uptime-block', { down: !up }]"></div>
+                    </div>
+                    <div class="axis"><span>30 days ago</span><span>Today</span></div>
+                  </article>
+                  <article class="panel report-panel">
+                    <div class="panel-title"><div><small>NETWORK LATENCY</small><h2>Global Ping Response</h2></div></div>
+                    <div class="chart-container">
+                      <svg viewBox="0 0 100 100" preserveAspectRatio="none" class="svg-graph">
+                        <polygon :points="latencyPolygon" fill="url(#latencyGrad)" opacity="0.3" />
+                        <polyline :points="latencyPolyline" fill="none" stroke="var(--accent)" stroke-width="2.5" />
+                      </svg>
+                    </div>
+                  </article>
+                  <article class="panel report-panel">
+                    <div class="panel-title"><div><small>BANDWIDTH</small><h2>Aggregated Throughput</h2></div></div>
+                    <div class="chart-container">
+                      <svg viewBox="0 0 100 100" preserveAspectRatio="none" class="svg-graph">
+                        <polygon :points="polygonPoints" fill="url(#chartGrad)" opacity="0.3" />
+                        <polyline :points="polylinePoints" fill="none" stroke="var(--blue)" stroke-width="2.5" />
+                      </svg>
+                    </div>
+                  </article>
+                  <article class="panel report-panel">
+                    <div class="panel-title"><div><small>INVENTORY</small><h2>Category Distribution</h2></div></div>
+                    <div class="stat-list">
+                      <div v-for="cat in categoryStats" :key="cat.name" class="stat-row">
+                        <span>{{ cat.name }}</span>
+                        <div class="stat-bar"><i :style="{ width: cat.percent + '%' }"></i></div>
+                        <b>{{ cat.count }}</b>
+                      </div>
+                    </div>
+                  </article>
+                </section>
+              </div>
+            </template>
+
+            <template v-else-if="route === 'integrations'">
+              <div class="page-title"><div><small>EXTERNAL SERVICES</small><h1>Integrations</h1><p>Manage webhooks and external alert dispatching.</p></div></div>
+              <section class="settings-grid" style="margin-top: 20px">
+                <article class="panel settings-card full-width">
+                  <div class="settings-title"><span><Webhook :size="19" /></span><div><h2>Alert Webhooks</h2><p>Send JSON payloads to external services (Slack, Teams, PagerDuty).</p></div></div>
+                  <div class="field-grid">
+                    <label style="grid-column: span 2">Webhook URL<input placeholder="https://example.com/api/webhook" /></label>
+                  </div>
+                  <div style="margin-top: 20px"><button class="signal-button compact">Save webhook</button></div>
+                </article>
+              </section>
+            </template>
+
             <template v-else-if="route === 'logs'">
-              <div class="page-title"><div><small>DIAGNOSTICS</small><h1>Live event stream</h1><p>Raw evidence from every active network check.</p></div><button class="outline-button" @click="exportLogs"><Download :size="15" /> Export CSV</button></div>
+              <div class="page-title"><div><small>DIAGNOSTICS</small><h1>Live event stream</h1><p>Raw evidence from every active network check.</p></div><div style="display:flex;gap:10px;"><button v-if="currentUser?.permissions?.manage_settings" class="outline-button danger-button" style="color:var(--red);border-color:var(--red);" @click="clearLogs"><Eraser :size="15" /> Clear Logs</button><button class="outline-button" @click="exportLogs"><Download :size="15" /> Export CSV</button></div></div>
               <div class="table-tools"><label><Search :size="16" /><input v-model="logSearch" placeholder="Search event stream..." /></label><div><button :class="{active: logStatusFilter === 'all'}" @click="logStatusFilter = 'all'">All</button><button :class="{active: logStatusFilter === 'success'}" @click="logStatusFilter = 'success'">Success</button><button :class="{active: logStatusFilter === 'fail'}" @click="logStatusFilter = 'fail'">Failures</button></div></div>
               <section class="terminal-log"><div class="log-head"><span class="live-dot"></span><b>STREAM ACTIVE</b><small>{{ filteredLogs.length }} entries</small></div><div class="log-line" v-for="(log,index) in filteredLogs" :key="index"><span>{{ userSettings.timeFormat === '12h' ? new Date(log.timestamp).toLocaleString('en-US',{hour:'numeric',minute:'numeric',second:'numeric',hour12:true}).split(' ')[0] : log.timestamp.split(' ')[1] }}</span><b :class="{down: log.down}">{{ log.down ? 'FAIL' : 'OK' }}</b><strong>{{ log.device }}</strong><em>PING {{ log.ping || 'N/A' }}</em><em>HTTP {{ log.http || 'N/A' }}</em><small>{{ log.bandwidth || '—' }}</small></div><div v-if="!filteredLogs.length" class="empty-state"><TerminalSquare :size="24" /><strong>No logs match filter</strong><span>Try adjusting your search criteria.</span></div></section>
             </template>

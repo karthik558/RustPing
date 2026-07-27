@@ -323,6 +323,15 @@ async fn logs_json() -> Json<serde_json::Value> {
     Json(json!(entries))
 }
 
+#[delete("/logs")]
+async fn delete_logs(_auth: Auth) -> Result<String, rocket::http::Status> {
+    if let Err(e) = OpenOptions::new().write(true).truncate(true).open(LOG_FILE) {
+        error!("Failed to clear log file: {}", e);
+        return Err(rocket::http::Status::InternalServerError);
+    }
+    Ok("Logs cleared".to_string())
+}
+
 // Load devices from a JSON file.
 async fn add_devices_from_file(file_path: &str, devices: SharedDevices) {
     let data = fs::read_to_string(file_path).expect("Unable to read file");
@@ -738,6 +747,7 @@ async fn main() {
             get_devices,
             export_log,
             logs_json,
+            delete_logs,
             add_web_device,
             delete_web_device,
             update_device,
