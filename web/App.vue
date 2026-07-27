@@ -20,6 +20,8 @@ const loading = ref(false)
 const notice = ref('')
 const search = ref('')
 const statusFilter = ref('all')
+const logSearch = ref('')
+const logStatusFilter = ref('all')
 const faqOpen = ref(0)
 const mobileMenu = ref(false)
 const showDeviceModal = ref(false)
@@ -107,6 +109,24 @@ const filteredDevices = computed(() => devices.value.filter(device => {
     || (statusFilter.value === 'offline' && device.ping_status === false)
   return matchText && matchState
 }))
+
+const filteredLogs = computed(() => {
+  let result = logs.value;
+  if (logStatusFilter.value === 'success') {
+    result = result.filter(l => !l.down);
+  } else if (logStatusFilter.value === 'fail') {
+    result = result.filter(l => l.down);
+  }
+  
+  if (logSearch.value) {
+    const term = logSearch.value.toLowerCase();
+    result = result.filter(l => 
+      l.device.toLowerCase().includes(term) || 
+      l.timestamp.toLowerCase().includes(term)
+    );
+  }
+  return result;
+})
 
 function go(next) {
   if (next === 'home') next = isAuthenticated.value ? 'dashboard' : 'login'
@@ -540,7 +560,8 @@ onBeforeUnmount(() => {
 
             <template v-else-if="route === 'logs'">
               <div class="page-title"><div><small>DIAGNOSTICS</small><h1>Live event stream</h1><p>Raw evidence from every active network check.</p></div><button class="outline-button" @click="exportLogs"><Download :size="15" /> Export CSV</button></div>
-              <section class="terminal-log"><div class="log-head"><span class="live-dot"></span><b>STREAM ACTIVE</b><small>{{ logs.length }} entries buffered</small></div><div class="log-line" v-for="(log,index) in logs" :key="index"><span>{{ userSettings.timeFormat === '12h' ? new Date(log.timestamp).toLocaleString('en-US',{hour:'numeric',minute:'numeric',second:'numeric',hour12:true}).split(' ')[0] : log.timestamp.split(' ')[1] }}</span><b :class="{down: log.down}">{{ log.down ? 'FAIL' : 'OK' }}</b><strong>{{ log.device }}</strong><em>PING {{ log.ping || 'N/A' }}</em><em>HTTP {{ log.http || 'N/A' }}</em><small>{{ log.bandwidth || '—' }}</small></div><div v-if="!logs.length" class="empty-state"><TerminalSquare :size="24" /><strong>Waiting for events</strong><span>New monitor results will appear here.</span></div></section>
+              <div class="table-tools"><label><Search :size="16" /><input v-model="logSearch" placeholder="Search event stream..." /></label><div><button :class="{active: logStatusFilter === 'all'}" @click="logStatusFilter = 'all'">All</button><button :class="{active: logStatusFilter === 'success'}" @click="logStatusFilter = 'success'">Success</button><button :class="{active: logStatusFilter === 'fail'}" @click="logStatusFilter = 'fail'">Failures</button></div></div>
+              <section class="terminal-log"><div class="log-head"><span class="live-dot"></span><b>STREAM ACTIVE</b><small>{{ filteredLogs.length }} entries</small></div><div class="log-line" v-for="(log,index) in filteredLogs" :key="index"><span>{{ userSettings.timeFormat === '12h' ? new Date(log.timestamp).toLocaleString('en-US',{hour:'numeric',minute:'numeric',second:'numeric',hour12:true}).split(' ')[0] : log.timestamp.split(' ')[1] }}</span><b :class="{down: log.down}">{{ log.down ? 'FAIL' : 'OK' }}</b><strong>{{ log.device }}</strong><em>PING {{ log.ping || 'N/A' }}</em><em>HTTP {{ log.http || 'N/A' }}</em><small>{{ log.bandwidth || '—' }}</small></div><div v-if="!filteredLogs.length" class="empty-state"><TerminalSquare :size="24" /><strong>No logs match filter</strong><span>Try adjusting your search criteria.</span></div></section>
             </template>
 
             <template v-else-if="route === 'settings'">
