@@ -39,7 +39,9 @@ if (!appUsers.value || appUsers.value.length === 0) {
 }
 
 const loginForm = reactive({ username: 'admin', password: '', error: '' })
-const deviceForm = reactive({ name: '', ip: '', category: 'Network', sensors: ['Ping'], http_path: '' })
+const deviceForm = reactive({ name: '', ip: '', category: 'Network', sensors: ['Ping'], http_path: '', port: null, snmp_community: '', parent_device: '' })
+const isEditingDevice = ref(false)
+const editingDeviceIndex = ref(-1)
 const userForm = reactive({ username: '', password: '', role: 'Operator', permissions: { manage_devices: false, view_logs: true, manage_settings: false, manage_users: false } })
 const emailForm = reactive({
   smtp_server: '', smtp_port: '587', smtp_username: '', smtp_password: '',
@@ -113,16 +115,18 @@ const faqs = [
 
 const isAuthenticated = computed(() => Boolean(currentUser.value) && document.cookie.split(';').some(cookie => cookie.trim() === 'auth=true'))
 const isApp = computed(() => appRoutes.includes(route.value))
-const onlineCount = computed(() => devices.value.filter(d => d.ping_status !== false).length)
-const offlineCount = computed(() => devices.value.filter(d => d.ping_status === false).length)
+const onlineCount = computed(() => devices.value.filter(d => d.ping_status === 'Up').length)
+const offlineCount = computed(() => devices.value.filter(d => d.ping_status === 'Down' || d.ping_status === 'Unreachable').length)
 const health = computed(() => devices.value.length ? Math.round((onlineCount.value / devices.value.length) * 100) : 100)
-const filteredDevices = computed(() => devices.value.filter(device => {
-  const matchText = `${device.name} ${device.ip} ${device.category}`.toLowerCase().includes(search.value.toLowerCase())
-  const matchState = statusFilter.value === 'all'
-    || (statusFilter.value === 'online' && device.ping_status !== false)
-    || (statusFilter.value === 'offline' && device.ping_status === false)
-  return matchText && matchState
-}))
+const filteredDevices = computed(() => {
+    return devices.value.filter(d => {
+    const s = search.value.toLowerCase()
+    const matchesSearch = d.name.toLowerCase().includes(s) || d.ip.includes(s)
+    const matchesStatus = statusFilter.value === 'all'
+    || (statusFilter.value === 'online' && d.ping_status === 'Up')
+    || (statusFilter.value === 'offline' && (d.ping_status === 'Down' || d.ping_status === 'Unreachable'))
+    return matchesSearch && matchesStatus
+  })})
 
 const filteredLogs = computed(() => {
   let result = logs.value;
@@ -247,20 +251,68 @@ async function addDevice() {
     flash('Complete the required fields and choose a sensor.')
     return
   }
-  const payload = { ...deviceForm, sensors: [...deviceForm.sensors] }
-  try {
-    const response = await fetch('/devices', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-    })
-    if (!response.ok) throw new Error()
-    await loadDevices()
-    flash(`${payload.name} is now being monitored.`)
-  } catch {
-    devices.value.push({ ...payload, ping_status: null, http_status: null, bandwidth_usage: null })
-    flash('Added in preview mode. Start RustPing to persist it.')
+  const payload = { 
+    ...deviceForm, 
+    sensors: [...deviceForm.sensors],
+    port: deviceForm.port ? Number(deviceForm.port) : null,
+    snmp_community: deviceForm.snmp_community || null,
+    parent_device: deviceForm.parent_device || null,
+    http_path: deviceForm.http_path || null
   }
-  Object.assign(deviceForm, { name: '', ip: '', category: 'Network', sensors: ['Ping'], http_path: '' })
+  
+  try {
+    if (isEditingDevice.value && editingDeviceIndex.value >= 0) {
+      const response = await fetch(`/devices/${editingDeviceIndex.value}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+      })
+      if (!response.ok) throw new Error()
+      flash(`${payload.name} has been updated.`)
+    } else {
+      const response = await fetch('/devices', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+      })
+      if (!response.ok) throw new Error()
+      flash(`${payload.name} is now being monitored.`)
+    }
+    await loadDevices()
+  } catch {
+    if (isEditingDevice.value) {
+      Object.assign(devices.value[editingDeviceIndex.value], payload)
+      flash('Updated in preview mode. Start RustPing to persist it.')
+    } else {
+      devices.value.push({ ...payload, ping_status: null, http_status: null, bandwidth_usage: null })
+      flash('Added in preview mode. Start RustPing to persist it.')
+    }
+  }
+  closeDeviceModal()
+}
+
+function openAddDeviceModal() {
+  isEditingDevice.value = false
+  editingDeviceIndex.value = -1
+  Object.assign(deviceForm, { name: '', ip: '', category: 'Network', sensors: ['Ping'], http_path: '', port: null, snmp_community: '', parent_device: '' })
+  showDeviceModal.value = true
+}
+
+function editDevice(device) {
+  isEditingDevice.value = true
+  editingDeviceIndex.value = devices.value.indexOf(device)
+  Object.assign(deviceForm, {
+    name: device.name,
+    ip: device.ip,
+    category: device.category,
+    sensors: [...device.sensors],
+    http_path: device.http_path || '',
+    port: device.port || null,
+    snmp_community: device.snmp_community || '',
+    parent_device: device.parent_device || ''
+  })
+  showDeviceModal.value = true
+}
+
+function closeDeviceModal() {
   showDeviceModal.value = false
+  Object.assign(deviceForm, { name: '', ip: '', category: 'Network', sensors: ['Ping'], http_path: '', port: null, snmp_community: '', parent_device: '' })
 }
 
 async function deleteDevice(device) {
@@ -335,7 +387,7 @@ async function saveEmailConfig(test = false) {
 }
 
 function formatStatus(device) {
-  return device.ping_status === false ? 'Offline' : device.ping_status === true ? 'Operational' : 'Checking'
+  return device.ping_status === 'Down' ? 'Offline' : device.ping_status === 'Unreachable' ? 'Unreachable' : device.ping_status === 'Up' ? 'Operational' : 'Checking'
 }
 
 function exportLogs() {
@@ -476,7 +528,7 @@ onBeforeUnmount(() => {
               <div class="mock-stats"><span><small>DEVICES</small><b>12</b></span><span><small>ONLINE</small><b>11</b></span><span><small>UPTIME</small><b>99.9%</b></span><span><small>ALERTS</small><b class="lime">01</b></span></div>
               <div class="mock-table">
                 <div class="mock-row head"><span>DEVICE</span><span>ADDRESS</span><span>SENSORS</span><span>STATE</span></div>
-                <div class="mock-row" v-for="device in sampleDevices.slice(0,4)" :key="device.name"><span><i :class="{bad: device.ping_status === false}"></i>{{ device.name }}</span><span>{{ device.ip }}</span><span>{{ device.sensors.join(' · ') }}</span><span :class="{danger: device.ping_status === false}">{{ device.ping_status ? 'Operational' : 'Offline' }}</span></div>
+                <div class="mock-row" v-for="device in sampleDevices.slice(0,4)" :key="device.name"><span><i :class="{bad: device.ping_status === 'Down'}"></i>{{ device.name }}</span><span>{{ device.ip }}</span><span>{{ device.sensors.join(' · ') }}</span><span :class="{danger: device.ping_status === 'Down'}">{{ device.ping_status === 'Up' ? 'Operational' : 'Offline' }}</span></div>
               </div>
               <div class="mock-bottom"><div><small>THROUGHPUT</small><div class="soft-bars"><i v-for="n in [40,70,52,85,62,44,76,58]" :style="{height:`${n}%`}" :key="n"></i></div></div><div><small>SENSOR MIX</small><div class="donut"></div></div></div>
             </div>
@@ -613,15 +665,15 @@ onBeforeUnmount(() => {
                   </div>
                 </article>
 
-                <article class="panel device-panel"><div class="panel-title"><div><small>PRIORITY VIEW</small><h2>Device status</h2></div><button @click="go('devices')">View all <ArrowRight :size="13" /></button></div><div class="device-list"><div v-for="device in devices.slice(0,5)" :key="device.name"><span class="device-icon"><Router :size="17" /></span><div><strong>{{ device.name }}</strong><small>{{ device.ip }} · {{ device.category }}</small></div><span :class="['status-pill', {offline: device.ping_status === false}]"><i></i>{{ formatStatus(device) }}</span></div></div></article>
+                <article class="panel device-panel"><div class="panel-title"><div><small>PRIORITY VIEW</small><h2>Device status</h2></div><button @click="go('devices')">View all <ArrowRight :size="13" /></button></div><div class="device-list"><div v-for="device in devices.slice(0,5)" :key="device.name"><span class="device-icon"><Router :size="17" /></span><div><strong>{{ device.name }}</strong><small>{{ device.ip }} · {{ device.category }}</small></div><span :class="['status-pill', {offline: device.ping_status === 'Down', unreachable: device.ping_status === 'Unreachable'}]"><i></i>{{ formatStatus(device) }}</span></div></div></article>
                 <article class="panel events-panel"><div class="panel-title"><div><small>ACTIVITY</small><h2>Recent events</h2></div><button @click="go('logs')">Open stream <ArrowRight :size="13" /></button></div><div class="event-list"><div><span><Check :size="14" /></span><p><b>Health check completed</b><small>All probes responded · just now</small></p></div><div v-if="offlineCount"><span class="error"><X :size="14" /></span><p><b>{{ offlineCount }} device{{ offlineCount > 1 ? 's' : '' }} unreachable</b><small>Escalation policy active · 2m ago</small></p></div><div><span><RefreshCw :size="14" /></span><p><b>Device registry synced</b><small>{{ devices.length }} records verified · 5m ago</small></p></div></div></article>
               </section>
             </template>
 
             <template v-else-if="route === 'devices'">
-              <div class="page-title"><div><small>INVENTORY / {{ devices.length.toString().padStart(2,'0') }}</small><h1>Monitored devices</h1><p>Manage every target and the checks assigned to it.</p></div><button v-if="currentUser?.permissions?.manage_devices" class="signal-button compact" @click="showDeviceModal = true"><Plus :size="15" /> Add device</button></div>
+              <div class="page-title"><div><small>INVENTORY / {{ devices.length.toString().padStart(2,'0') }}</small><h1>Monitored devices</h1><p>Manage every target and the checks assigned to it.</p></div><button v-if="currentUser?.permissions?.manage_devices" class="signal-button compact" @click="openAddDeviceModal"><Plus :size="15" /> Add device</button></div>
               <div class="table-tools"><label><Search :size="16" /><input v-model="search" placeholder="Search name, IP, or category" /></label><div><button :class="{active: statusFilter === 'all'}" @click="statusFilter = 'all'">All</button><button :class="{active: statusFilter === 'online'}" @click="statusFilter = 'online'">Online</button><button :class="{active: statusFilter === 'offline'}" @click="statusFilter = 'offline'">Offline</button></div></div>
-              <section class="data-table"><div class="table-row table-head"><span>Device</span><span>Address</span><span>Category</span><span>Sensors</span><span>Status</span><span></span></div><div v-for="device in filteredDevices" :key="device.ip" class="table-row"><span class="device-cell"><i :class="{offline: device.ping_status === false}"></i><b>{{ device.name }}</b></span><span class="mono">{{ device.ip }}</span><span>{{ device.category }}</span><span class="sensor-list"><b v-for="sensor in device.sensors" :key="sensor">{{ sensor }}</b></span><span><em :class="['status-pill', {offline: device.ping_status === false}]"><i></i>{{ formatStatus(device) }}</em></span><span><button v-if="currentUser?.permissions?.manage_devices" class="icon-button danger-button" :aria-label="`Delete ${device.name}`" @click="deleteDevice(device)"><Trash2 :size="15" /></button></span></div><div v-if="!filteredDevices.length" class="empty-state"><Search :size="24" /><strong>No devices found</strong><span>Try another search or filter.</span></div></section>
+              <section class="data-table"><div class="table-row table-head"><span>Device</span><span>Address</span><span>Category</span><span>Sensors</span><span>Status</span><span style="display:flex;justify-content:flex-end;"></span></div><div v-for="device in filteredDevices" :key="device.ip" class="table-row"><span class="device-cell"><i :class="{offline: device.ping_status === 'Down', unreachable: device.ping_status === 'Unreachable'}"></i><b>{{ device.name }}</b></span><span class="mono">{{ device.ip }}</span><span>{{ device.category }}</span><span class="sensor-list"><b v-for="sensor in device.sensors" :key="sensor">{{ sensor }}</b></span><span><em :class="['status-pill', {offline: device.ping_status === 'Down', unreachable: device.ping_status === 'Unreachable'}]"><i></i>{{ formatStatus(device) }}</em></span><span style="display:flex;justify-content:flex-end;gap:5px;"><button v-if="currentUser?.permissions?.manage_devices" class="icon-button" :aria-label="`Edit ${device.name}`" @click="editDevice(device)"><Pencil :size="15" /></button><button v-if="currentUser?.permissions?.manage_devices" class="icon-button danger-button" :aria-label="`Delete ${device.name}`" @click="deleteDevice(device)"><Trash2 :size="15" /></button></span></div><div v-if="!filteredDevices.length" class="empty-state"><Search :size="24" /><strong>No devices found</strong><span>Try another search or filter.</span></div></section>
             </template>
 
             <template v-else-if="route === 'logs'">
@@ -726,7 +778,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div v-if="showDeviceModal" class="modal-backdrop" @click.self="showDeviceModal = false"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="device-modal-title"><div class="modal-head"><div><small>NEW MONITOR</small><h2 id="device-modal-title">Add a device</h2></div><button aria-label="Close" @click="showDeviceModal = false"><X :size="19" /></button></div><div class="field-grid"><label>Device name<input v-model="deviceForm.name" placeholder="Core gateway" /></label><label>IP or hostname<input v-model="deviceForm.ip" placeholder="10.0.0.1" /></label><label>Category<input v-model="deviceForm.category" placeholder="Network" /></label><label>HTTP URL<input v-model="deviceForm.http_path" placeholder="https://status.example.com" /></label></div><div class="sensor-pick"><small>SENSORS</small><div><button v-for="sensor in ['Ping','Http','Https']" :key="sensor" :class="{active: deviceForm.sensors.includes(sensor)}" @click="toggleSensor(sensor)"><Check v-if="deviceForm.sensors.includes(sensor)" :size="13" />{{ sensor }}</button></div></div><button class="signal-button modal-action" @click="addDevice">Begin monitoring <ArrowRight :size="15" /></button></section></div>
+      <div v-if="showDeviceModal" class="modal-backdrop" @click.self="closeDeviceModal"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="device-modal-title"><div class="modal-head"><div><small>{{ isEditingDevice ? 'EDIT MONITOR' : 'NEW MONITOR' }}</small><h2 id="device-modal-title">{{ isEditingDevice ? 'Edit device' : 'Add a device' }}</h2></div><button aria-label="Close" @click="closeDeviceModal"><X :size="19" /></button></div><div class="field-grid"><label>Device name<input v-model="deviceForm.name" placeholder="Core gateway" /></label><label>IP or hostname<input v-model="deviceForm.ip" placeholder="10.0.0.1" /></label><label>Category<input v-model="deviceForm.category" placeholder="Network" /></label><label>Parent Device (IP)<input v-model="deviceForm.parent_device" placeholder="Dependency IP (optional)" /></label><label>TCP Port<input type="number" v-model.number="deviceForm.port" placeholder="e.g. 22" /></label><label>SNMP Community<input v-model="deviceForm.snmp_community" placeholder="public" /></label><label style="grid-column: span 2">HTTP URL<input v-model="deviceForm.http_path" placeholder="https://status.example.com" /></label></div><div class="sensor-pick"><small>SENSORS</small><div><button v-for="sensor in ['Ping','Http','Https','Port','Snmp']" :key="sensor" :class="{active: deviceForm.sensors.includes(sensor)}" @click="toggleSensor(sensor)"><Check v-if="deviceForm.sensors.includes(sensor)" :size="13" />{{ sensor }}</button></div></div><button class="signal-button modal-action" @click="addDevice">{{ isEditingDevice ? 'Save changes' : 'Begin monitoring' }} <ArrowRight :size="15" /></button></section></div>
       <div v-if="showUserModal" class="modal-backdrop" @click.self="showUserModal = false"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="user-modal-title"><div class="modal-head"><div><small>AUTHENTICATION</small><h2 id="user-modal-title">Create operator</h2></div><button aria-label="Close" @click="showUserModal = false"><X :size="19" /></button></div><div class="field-grid"><label>Username<input v-model="userForm.username" placeholder="Operator ID" autocomplete="new-password" /></label><label>Password<input type="password" v-model="userForm.password" placeholder="••••••••" autocomplete="new-password" /></label></div><div class="field-grid" style="margin-top:20px"><label>Role Template<select v-model="userForm.role" @change="applyUserTemplate"><option value="Admin">Admin (Full Access)</option><option value="Operator">Operator (Standard)</option><option value="Read-Only">Read-Only</option></select></label></div><div class="sensor-pick"><small>ADVANCED PERMISSIONS</small><div style="flex-direction:column;align-items:flex-start;margin-top:15px"><label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:12px;text-transform:none"><input type="checkbox" v-model="userForm.permissions.manage_devices" style="width:16px;height:16px;margin:0"> Manage network devices</label><label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:12px;text-transform:none"><input type="checkbox" v-model="userForm.permissions.view_logs" style="width:16px;height:16px;margin:0"> View and export live event stream</label><label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:12px;text-transform:none"><input type="checkbox" v-model="userForm.permissions.manage_settings" style="width:16px;height:16px;margin:0"> Modify interface and alert settings</label><label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:12px;text-transform:none"><input type="checkbox" v-model="userForm.permissions.manage_users" style="width:16px;height:16px;margin:0"> Manage operators and access</label></div></div><button class="signal-button modal-action" @click="saveUser">Create operator <ArrowRight :size="15" /></button></section></div>
     </template>
   </div>

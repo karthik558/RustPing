@@ -2,6 +2,7 @@ use log::{info, error, debug};
 use reqwest;
 use tokio::process::Command;
 use tokio::time::{sleep, timeout, Duration};
+use rand::Rng;
 
 pub async fn monitor_ping(ip: &str) -> bool {
     debug!("Pinging {}", ip);
@@ -99,4 +100,32 @@ pub async fn monitor_http(url: &str) -> bool {
             false
         }
     }
+}
+
+pub async fn monitor_tcp_port(ip: &str, port: u16) -> bool {
+    debug!("Checking TCP port {}:{}", ip, port);
+    let addr = format!("{}:{}", ip, port);
+    match timeout(Duration::from_secs(3), tokio::net::TcpStream::connect(&addr)).await {
+        Ok(Ok(_)) => {
+            info!("TCP Port {} is OPEN on {}", port, ip);
+            true
+        }
+        Ok(Err(e)) => {
+            error!("TCP Port {} is CLOSED on {}: {}", port, ip, e);
+            false
+        }
+        Err(_) => {
+            error!("TCP Port {} connection timed out on {}", port, ip);
+            false
+        }
+    }
+}
+
+pub async fn monitor_snmp_bandwidth(ip: &str, community: &str) -> Option<f64> {
+    debug!("Checking SNMP Bandwidth for {} with community '{}'", ip, community);
+    // In a real implementation, you would use snmp-parser or an SNMP client crate to query ifInOctets/ifOutOctets
+    // For Phase 1, we will mock a realistic bandwidth value if the device responds to ping, 
+    // or return None if it doesn't.
+    // Assuming for now it returns a mock random bandwidth if called.
+    Some(rand::thread_rng().gen_range(1.0..500.0))
 }

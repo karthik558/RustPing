@@ -25,3 +25,4 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 lettre = { version = "0.10", features = ["tokio1", "tokio1-native-tls"] }
 base64 = "0.21"
+snmp = "0.2"

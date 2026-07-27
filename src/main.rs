@@ -83,8 +83,8 @@ async fn process_logs(start_date_parsed: Option<NaiveDate>, end_date_parsed: Opt
 // Define a struct to track device status.
 #[derive(Debug, Clone)]
 struct DeviceStatus {
-    ping_status: Option<bool>,
-    http_status: Option<bool>,
+    ping_status: Option<String>,
+    http_status: Option<String>,
     bandwidth_usage: Option<f64>,
     last_update: DateTime<Local>,
     changed_at: DateTime<Local>,
@@ -102,8 +102,8 @@ impl DeviceStatus {
         }
     }
 
-    fn update_ping(&mut self, new_status: bool) -> bool {
-        let changed = self.ping_status != Some(new_status);
+    fn update_ping(&mut self, new_status: String) -> bool {
+        let changed = self.ping_status.as_ref() != Some(&new_status);
         if changed {
             self.ping_status = Some(new_status);
             self.changed_at = Local::now();
@@ -375,6 +375,12 @@ struct WebDevice {
     sensors: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     http_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snmp_community: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_device: Option<String>,
 }
 
 // Add this validation function
@@ -420,10 +426,16 @@ impl From<WebDevice> for ModelDevice {
                     "Ping" => SensorType::Ping,
                     "Http" => SensorType::Http,
                     "Https" => SensorType::Https,
+                    "Bandwidth" => SensorType::Bandwidth,
+                    "Port" => SensorType::Port,
+                    "Snmp" => SensorType::Snmp,
                     _ => SensorType::Ping
                 })
                 .collect(),
             http_path: web_device.http_path,
+            port: web_device.port,
+            snmp_community: web_device.snmp_community,
+            parent_device: web_device.parent_device,
             ping_status: None,
             http_status: None,
             bandwidth_usage: None,
@@ -608,10 +620,16 @@ async fn update_device(id: usize, device: &str, devices: &State<SharedDevices>) 
                     "Ping" => SensorType::Ping,
                     "Http" => SensorType::Http,
                     "Https" => SensorType::Https,
+                    "Bandwidth" => SensorType::Bandwidth,
+                    "Port" => SensorType::Port,
+                    "Snmp" => SensorType::Snmp,
                     _ => SensorType::Ping
                 })
                 .collect(),
             http_path: updated_device.http_path,
+            port: updated_device.port,
+            snmp_community: updated_device.snmp_community,
+            parent_device: updated_device.parent_device,
             ping_status: None,
             http_status: None,
             bandwidth_usage: None,
@@ -764,30 +782,67 @@ async fn main() {
 
             // Network probes run concurrently and never hold the shared device
             // lock. This keeps the API responsive even when a target is slow.
+            // To evaluate parent dependency, we need a map of current device statuses before checking
+            let parent_statuses: HashMap<String, String> = {
+                let locked = devices_clone.lock().await;
+                locked.iter().map(|d| (d.name.clone(), d.ping_status.clone().unwrap_or("Checking".to_string()))).collect()
+            };
+
             let check_results = futures::future::join_all(
-                devices_to_monitor.into_iter().map(|dev| async move {
-                    let ping_result = monitor_ping(&dev.ip).await;
+                devices_to_monitor.into_iter().map(|dev| {
+                    let parent_statuses = parent_statuses.clone();
+                    async move {
+                    // Check parent logic
+                    if let Some(parent) = &dev.parent_device {
+                        if let Some(status) = parent_statuses.get(parent) {
+                            if status == "Down" || status == "Unreachable" {
+                                return (dev, "Unreachable".to_string(), Some("Unreachable".to_string()), None);
+                            }
+                        }
+                    }
+
+                    // Proceed with actual monitoring
+                    let mut is_up = true;
+                    if dev.sensors.contains(&SensorType::Ping) {
+                        is_up = is_up && sensors::monitor_ping(&dev.ip).await;
+                    }
+                    if dev.sensors.contains(&SensorType::Port) {
+                        if let Some(port) = dev.port {
+                            is_up = is_up && sensors::monitor_tcp_port(&dev.ip, port).await;
+                        }
+                    }
+
+                    let ping_result_str = if is_up { "Up".to_string() } else { "Down".to_string() };
+
                     let has_http_sensor = dev.sensors.contains(&SensorType::Http)
                         || dev.sensors.contains(&SensorType::Https);
 
-                    let (http_status, bandwidth_usage) = if ping_result && has_http_sensor {
+                    let (http_status, mut bandwidth_usage) = if is_up && has_http_sensor {
                         if let Some(ref url) = dev.http_path {
-                            if monitor_http(url).await {
-                                (Some(true), Some(rand::thread_rng().gen_range(10.0..1000.0)))
+                            if sensors::monitor_http(url).await {
+                                (Some("Up".to_string()), Some(rand::thread_rng().gen_range(10.0..1000.0)))
                             } else {
-                                (Some(false), None)
+                                (Some("Down".to_string()), None)
                             }
                         } else {
-                            (Some(false), None)
+                            (Some("Down".to_string()), None)
                         }
                     } else if has_http_sensor {
-                        (Some(false), None)
+                        (Some("Down".to_string()), None)
                     } else {
                         (None, None)
                     };
 
-                    (dev, ping_result, http_status, bandwidth_usage)
-                })
+                    if is_up && dev.sensors.contains(&SensorType::Snmp) {
+                        if let Some(community) = &dev.snmp_community {
+                            if let Some(bw) = sensors::monitor_snmp_bandwidth(&dev.ip, community).await {
+                                bandwidth_usage = Some(bw);
+                            }
+                        }
+                    }
+
+                    (dev, ping_result_str, http_status, bandwidth_usage)
+                }})
             ).await;
 
             let mut devices_locked = devices_clone.lock().await;
@@ -795,12 +850,12 @@ async fn main() {
                 let status = device_statuses.entry(dev.ip.clone())
                     .or_insert_with(DeviceStatus::new);
                 
-                if status.update_ping(ping_result) {
+                if status.update_ping(ping_result.clone()) {
                     status_changed = true;
                 }
 
                 if let Some(device) = devices_locked.iter_mut().find(|d| d.ip == dev.ip) {
-                    if device.ping_status != Some(ping_result) || device.http_status != http_status {
+                    if device.ping_status != Some(ping_result.clone()) || device.http_status != http_status {
                         status_changed = true;
                     }
                     device.ping_status = Some(ping_result);
@@ -824,20 +879,20 @@ async fn main() {
                         // Format HTTP status and bandwidth based on sensor configuration
                         let http_status = if dev.sensors.contains(&SensorType::Http) || 
                                            dev.sensors.contains(&SensorType::Https) {
-                            dev.http_status.map_or("FAIL", |s| if s { "OK" } else { "FAIL" })
+                            dev.http_status.as_deref().unwrap_or("FAIL")
                         } else {
                             "N/A"
                         };
                         
                         let bandwidth = if (dev.sensors.contains(&SensorType::Http) || 
-                                         dev.sensors.contains(&SensorType::Https)) && 
-                                         dev.http_status == Some(true) {
+                                         dev.sensors.contains(&SensorType::Https) || dev.sensors.contains(&SensorType::Snmp)) && 
+                                         dev.ping_status.as_deref() == Some("Up") {
                             dev.bandwidth_usage.map_or("N/A".to_string(), |b| format!("{:.2} Mbps", b))
                         } else {
                             "N/A".to_string()
                         };
                         
-                        let ping_status_str = status.ping_status.map_or("N/A", |s| if s { "OK" } else { "FAIL" });
+                        let ping_status_str = status.ping_status.as_deref().unwrap_or("N/A");
                         
                         let log_entry = format!(
                             "{} - {} ({}): Ping: {}, HTTP: {}, Bandwidth: {}\n",

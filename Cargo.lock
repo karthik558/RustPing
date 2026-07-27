@@ -21,6 +21,7 @@ dependencies = [
  "rocket",
  "serde",
  "serde_json",
+ "snmp",
  "thiserror",
  "tokio",
  "tokio-postgres",
@@ -1919,6 +1920,12 @@ name = "smallvec"
 version = "1.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7fcf8323ef1faaee30a44a340193b1ac6814fd9b7b4e88e9d4519a3e4abe1cfd"
+
+[[package]]
+name = "snmp"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff2a575449a5c487091e541c0cb4ccd83620167fd52363f816fe28f6f357fc00"
 
 [[package]]
 name = "socket2"
