@@ -1,250 +1,206 @@
-# 🚀 RustPing: Real-time Network Monitoring
+# RustPing: Real-Time Network & Infrastructure Operations Console
 
-RustPing 2.0 pairs its Rust monitoring engine with a professional Vue 3
-operations console. The unified frontend includes authentication, a live
-dashboard, device inventory, event stream, and alert configuration in one
-responsive application.
-
-[![Rust](https://img.shields.io/badge/Rust-1.56+-orange.svg?style=for-the-badge&logo=rust)](https://www.rust-lang.org/)
-[![Rocket](https://img.shields.io/badge/Rocket-0.5+-red.svg?style=for-the-badge&logo=rocket)](https://rocket.rs/)
+[![Live Demo](https://img.shields.io/badge/Live_Demo-rustping.samsproject.in-007acc?style=for-the-badge&logo=nginx)](https://rustping.samsproject.in/)
+[![Rust](https://img.shields.io/badge/Rust-1.70+-orange.svg?style=for-the-badge&logo=rust)](https://www.rust-lang.org/)
+[![Rocket](https://img.shields.io/badge/Rocket-0.5.1-red.svg?style=for-the-badge&logo=rocket)](https://rocket.rs/)
+[![Vue.js](https://img.shields.io/badge/Vue.js-3.5-4FC08D.svg?style=for-the-badge&logo=vuedotjs)](https://vuejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/karthik558/Rust-Ping/rust.yml?branch=main&style=for-the-badge)](https://github.com/karthik558/Rust-Ping/actions)
 
+**RustPing** is an enterprise-grade, high-performance network device monitoring and operations console built with **Rust (Rocket framework)** and **Vue 3**. It provides real-time infrastructure tracking, parent dependency mapping, SLA analytics, alert webhooks, and live event diagnostic logging in a single responsive operations interface.
 
-RustPing is a powerful, real-time network monitoring tool built with Rust and the Rocket web framework. It provides an interactive dashboard to monitor your network devices using Ping, HTTP checks, and bandwidth monitoring, all with a focus on speed, reliability, and ease of use.
+**Live Website / Production Deployment:** [https://rustping.samsproject.in/](https://rustping.samsproject.in/)
 
-## ✨ Features
+---
 
-*   **🔍 Real-time Device Monitoring:** Keep an eye on your network devices with live updates.
-*   **📊 Interactive Dashboard:** Visualize your network's health with intuitive charts and tables.
-*   **🌐 Multiple Sensors:**
-    *   **Ping:** Check device availability.
-    *   **HTTP:** Monitor website status and response times.
-    *   **Bandwidth:** Track network usage.
-*   **📝 Detailed Logging:**  Get comprehensive logs for troubleshooting and analysis.
-*   **🔄 Automatic Retry:**  Handles intermittent network issues gracefully.
-*   **📈 Visual Status Indicators:** Quickly identify problems with clear visual cues.
-*   **🌙 / ☀️  Dark/Light Mode:** Choose the theme that suits your preference.
-*   **📅 Log Export:** Export logs in CSV or TXT format for offline analysis.
-*   **🔐 User Authentication:** Secure access with a login system (and planned role-based access).
-*   **📱 Responsive Design:**  Works seamlessly on various devices, including desktops and tablets.
-*   **🛠️ Device Dashboard** Users can add devices from front-end itself without editing the JSON.
+## Key Features
 
-## 🚧 Roadmap
+* **High-Performance Engine:** Multi-threaded asynchronous sensor checks handling thousands of probes per second with minimal CPU and memory utilization.
+* **Multi-Sensor Monitoring:**
+  * **ICMP Ping:** Latency tracking, packet loss detection, and status history.
+  * **HTTP/HTTPS:** Web service HTTP response code verification and endpoint checks.
+  * **TCP Port Check:** Monitoring specific service ports (SSH, RDP, MySQL, Postgres, custom ports).
+  * **SNMP Monitoring:** Querying network switch and router interface metrics.
+  * **Bandwidth & Traffic:** Real-time aggregated throughput metrics.
+* **Visual Topology Engine:**
+  * **Ring Topology:** Circular loop linking adjacent nodes with a central core node.
+  * **Star Hub:** Radial hub-and-spoke layout for gateway-centered networks.
+  * **Grid Mesh:** Interconnected matrix mesh layout for rack environments.
+  * **Tree Hierarchy:** Parent-child dependency tree rendering.
+* **SLA & Reliability Analytics:** 30-day uptime heatmap, ping latency trend curves, category breakdown, and light-theme PDF report exporter with brand logos.
+* **Live Diagnostic Event Stream:** Continuous raw evidence log stream with search filtering, CSV export, and administrative log clearing.
+* **Alerting & Webhook Integrations:** Configurable alert routing supporting Slack, Microsoft Teams, PagerDuty, and SMTP Email dispatching.
+* **Parent Dependency Trees:** Prevents alert cascades by suppressing child device notifications when a parent router or switch becomes unreachable.
+* **Dual Console Themes:** Seamless switching between Dark Mode and Light Mode.
 
-These features are planned for future development:
+---
 
-*   **✅ Upcoming: User authentication and role-based access control:**  Control access and permissions.
-*   **✅ Upcoming: Add device management features:**  Add, remove, and edit devices from the dashboard.
-*   **🔴 Upcoming: New Sensors (TCP, UDP, etc.):**  Expand monitoring capabilities.
-*   **🔴 Upcoming: Email/SMS Notifications:**  Get alerts for critical device status changes.
-*   **🔴 Upcoming: Docker Support:** Simplify deployment and portability.
-*   **🔴 Upcoming: Mobile App:** Monitor your network on the go.
+## Screenshots
 
-## 📸 Screenshots
+| View | Dark Mode | Light Mode |
+| :--- | :--- | :--- |
+| **Login Console** | ![Login Dark](screenshots/loginDark.png) | ![Login Light](screenshots/loginLight.png) |
+| **Live Operations Dashboard** | ![Dashboard Dark](screenshots/dashboardHome-dark.png) | ![Dashboard Light](screenshots/dashboardHome-light.png) |
+| **Device Inventory & Management** | ![Devices Dark](screenshots/devDashBoard-dark.png) | ![Devices Light](screenshots/devDashBoard-light.png) |
+| **Network Topology Map** | ![Topology Dark](screenshots/topology-dark.png) | ![Topology Light](screenshots/topology-light.png) |
+| **SLA & Analytics Reports** | ![Reports Dark](screenshots/reports-dark.png) | ![Reports Light](screenshots/reports-light.png) |
+| **Live Diagnostic Event Stream** | ![Event Stream Dark](screenshots/liveLog-dark.png) | ![Event Stream Light](screenshots/liveLog-light.png) |
 
-| Dark Mode                                  | Light Mode                                    |
-| :----------------------------------------- | :-------------------------------------------- |
-| ![Auth-Dark](screenshots/authLogin-dark.png)          | ![Auth-Light](screenshots/authLogin-light.png)     |
-| ![Login-Dark](screenshots/loginDark.png)              | ![Login-Light](screenshots/loginLight.png)|
-| ![Pass-Reset-Dark](screenshots/passReset-dark.png)    | ![Pass-Reset-Light](screenshots/passReset-light.png)  |
-| ![Device-Dark](screenshots/devDashBoard-dark.png)     | ![Device-Light](screenshots/devDashBoard-light.png) |
-| ![Dashboard-Dark](screenshots/dashboardHome-dark.png) | ![Dashboard-Light](screenshots/dashboardHome-light.png)   |
-| ![Live-Log-Dark](screenshots/liveLog-dark.png)        | ![Live-Log-Light](screenshots/liveLog-light.png)     |
-| ![Fail-Log-Dark](screenshots/failedLog-dark.png)      | ![Fail-Log-Light](screenshots/failedLog-light.png)   |
+---
 
-## 📖 Table of Contents
+## Table of Contents
 
-*   [Prerequisites](#-prerequisites)
-*   [Installation](#-installation)
-    *   [Linux/MacOS](#installation-linuxmacos)
-    *   [Windows](#installation-windows)
-*   [Default Password](#-default-password-for-webui)
-*   [Configuration](#-configuration)
-*   [Usage](#-usage)
-*   [Adding Devices](#-adding-devices)
-*   [API Endpoints](#-api-endpoints)
-*   [Contributing](#-contributing)
-*   [License](#-license)
+- [Prerequisites](#prerequisites)
+- [Installation & Build Guide](#installation--build-guide)
+  - [Linux (Ubuntu / Debian / RHEL)](#linux-ubuntu--debian--rhel)
+  - [macOS (Apple Silicon & Intel)](#macos-apple-silicon--intel)
+  - [Windows 10 / 11 (MSYS2 / MinGW)](#windows-10--11-msys2--mingw)
+- [Quick Start](#quick-start)
+- [Default Login Credentials](#default-login-credentials)
+- [Device Configuration](#device-configuration-devicesjson)
+- [REST API Reference](#rest-api-reference)
+- [License](#license)
 
-## ⚙️ Prerequisites
+---
 
-*   **Rust:**  1.56 or higher.  Install from [rustup.rs](https://rustup.rs/).
-*   **Cargo:**  The Rust package manager (automatically installed with Rust).
-*   **Network Access:**  RustPing needs network access to monitor your devices.
+## Prerequisites
 
-## 🛠️ Installation
+- **Rust:** Version `1.70` or higher ([rustup.rs](https://rustup.rs/))
+- **Node.js & npm:** Node `18+` and npm `9+` (for compiling Vue 3 frontend assets)
+- **Network Permissions:** RAW socket capabilities (on Linux, requires `CAP_NET_RAW` or elevated execution for ICMP ping probes).
 
-### Installation (Linux/MacOS)
+---
 
-1.  **Clone the Repository:**
+## Installation & Build Guide
 
-    ```bash
-    git clone https://github.com/karthik558/Rust-Ping.git
-    cd Rust-Ping
-    ```
+### Linux (Ubuntu / Debian / RHEL)
 
-2.  **Install and build the Vue interface:**
+```bash
+# 1. Clone the repository
+git clone https://github.com/karthik558/Rust-Ping.git
+cd Rust-Ping
 
-    ```bash
-    npm install
-    npm run build
-    ```
+# 2. Install dependencies and build the Vue 3 frontend
+npm install
+npm run build
 
-3.  **Build the Rust service (Release Mode):**
+# 3. Build the Rust backend release binary
+cargo build --release
 
-    ```bash
-    cargo build --release
-    ```
-    This creates an optimized executable in the `target/release` directory.
+# 4. Grant ICMP Ping permissions to the binary for non-root execution
+sudo setcap cap_net_raw=+ep ./target/release/RustPing
 
-4.  **Run the application:**
+# 5. Execute RustPing
+./target/release/RustPing
+```
 
-    ```bash
-    ./target/release/Rust-Ping  # Run the compiled executable directly
-    ```
-     Alternatively use cargo:
-    ```bash
-     cargo run
-    ```
+### macOS (Apple Silicon & Intel)
 
-5. **Access RustPing:** Open `http://127.0.0.1:8000/`.
+```bash
+# 1. Clone the repository
+git clone https://github.com/karthik558/Rust-Ping.git
+cd Rust-Ping
 
-### Installation (Windows)
+# 2. Build frontend assets
+npm install
+npm run build
 
-1.  **Clone the Repository:**
-    ```bash
-    git clone https://github.com/karthik558/Rust-Ping.git
-    cd Rust-Ping
-    ```
+# 3. Build & Run via Cargo
+cargo run --release
+```
 
-2.  **Install MSYS2:**  Follow the instructions on the [MSYS2 website](https://www.msys2.org/) to install it.  This provides the necessary build tools.
+### Windows 10 / 11 (MSYS2 / MinGW)
 
-3. **Rust Installation (if not already installed):** Follow the instructions on [Rust website](https://www.rust-lang.org/tools/install) to install Rust.
+1. Install **Rust** via [rustup.rs](https://rustup.rs/) using the `x86_64-pc-windows-gnu` or `x86_64-pc-windows-msvc` toolchain.
+2. Install **Node.js** from [nodejs.org](https://nodejs.org/).
+3. Open PowerShell or Command Prompt:
 
-4. **Alternative MinGW Installation (if msys2 not working):** Download and install MinGW-w64 from [MinGW-w64 installer](https://github.com/Vuniverse0/mingwInstaller/releases/download/1.2.1/mingwInstaller.exe)
+```powershell
+# 1. Clone repository
+git clone https://github.com/karthik558/Rust-Ping.git
+cd Rust-Ping
 
-5. **Add MinGW to PATH:** Ensure the `bin` directory of your MinGW-w64 installation is added to your system's PATH environment variable. It should look similar to this: `C:\Program Files\mingw-w64\x86_64-8.1.0-posix-seh-rt_v6-rev0\mingw64\bin`
+# 2. Build frontend assets
+npm install
+npm run build
 
-6.  **Set Rustup Default (Important!):**
-   ```bash
-   rustup default stable-x86_64-pc-windows-gnu
+# 3. Build Rust binary
+cargo build --release
+
+# 4. Execute RustPing
+.\target\release\RustPing.exe
+```
+
+---
+
+## Quick Start
+
+1. Start the RustPing service using `./target/release/RustPing` or `cargo run`.
+2. Open a web browser and navigate to:
+   ```text
+   http://127.0.0.1:8000/
    ```
-   Verify with:
-   ```bash
-   rustup show
-   ```
+3. Authenticate with the default administrative credentials to manage devices, view topology maps, and export reports.
 
-7.  **Open a *New* Command Prompt:** Open a new command prompt or PowerShell window *after* installing MSYS2 and setting the Rustup default. This ensures the environment variables are loaded correctly. Navigate to project directory:
-    ```bash
-     cd Rust-Ping
-    ```
+---
 
-8.  **Build the Project:**
+## Default Login Credentials
 
-    ```bash
-    cargo build --release
-    ```
+* **Username:** `admin`
+* **Password:** `admin`
 
-9.  **Run the Application:**
+> [!IMPORTANT]
+> Change the default password immediately after initial authentication under **Settings > Operators** or User Management.
 
-    ```bash
-     cargo run
-    ```
-    or (better for deployment):
-    ```bash
-    .\target\release\Rust-Ping.exe
-    ```
+---
 
-10. **Access the Dashboard:** Open your web browser and navigate to `http://127.0.0.1:8000/`.  (Note the trailing `/` might be needed if you're directly running the executable).
+## Device Configuration (`devices.json`)
 
-## 🔑 Default Password for WebUI
-
-*   **Username:** `admin`
-*   **Password:** `admin`
-
-**Important:** Change the default password immediately after your first login for security reasons!
-
-## ⚙️ Configuration (Optional)
-
-The `devices.json` file in the project's root directory controls which devices are monitored.  Edit this file to add, remove, or modify devices.  The file uses JSON format:
+Monitored assets are configured in `devices.json` in the root directory and can be updated through the Web UI modal or modified manually:
 
 ```json
 [
   {
-    "name": "Router",
+    "name": "Core Switch",
     "ip": "192.168.1.1",
+    "category": "Network",
     "sensors": ["Ping", "Http"],
-    "http_path": "http://192.168.1.1"
+    "http_path": "http://192.168.1.1",
+    "parent_device": null
   },
   {
-    "name": "NAS",
-    "ip": "192.168.1.2",
-    "sensors": ["Ping"]
-  },
-  {
-    "name": "Example Website",
-    "ip": "www.example.com",
-    "sensors": ["Http"],
-    "http_path": "https://www.example.com"
+    "name": "Application Server",
+    "ip": "192.168.1.50",
+    "category": "Linux Server",
+    "sensors": ["Ping", "Http", "TcpPort"],
+    "tcp_port": 8080,
+    "parent_device": "Core Switch"
   }
 ]
 ```
 
-*   **`name`:**  A descriptive name for the device.
-*   **`ip`:** The IP address or hostname of the device.
-*   **`sensors`:**  An array of sensors to use ("Ping", "Http", "Bandwidth").
-*   **`http_path`:**  (Required for "Http" sensor) The full URL to check (e.g., `http://192.168.1.1` or `https://www.example.com`).
+---
 
-## 🚀 Usage
+## REST API Reference
 
-1.  **Access the Dashboard:** Open `http://127.0.0.1:8000/` (or `/static/index.html`) in your web browser.
-2.  **Configure Devices:** Edit the `devices.json` file as described above.
-3.  **Automatic Refresh:** The dashboard automatically refreshes every 5 seconds to display the latest device status.
-4.  **View Details:** Click on entries in the tables to see more detailed information.
-5. **Export Logs:** Use the log export form to generate CSV or TXT files of your monitoring data.
+RustPing exposes a RESTful JSON API endpoint suite:
 
-## 🖥️ Adding Devices
-1.  **Access the Dashboard:** Open `http://127.0.0.1:8000/static/manage-devices.html` in your web browser.
-2.  **Add Device:** Fill in the form with the device's name, IP address, Category, and sensors.  Click "Add Device" to save it to the `devices.json` file.
-3. **View Devices:** After adding devices, you can view them listed on the dashboard. (Note: this will be updated in real-time without needing to refresh the page but wait for a few seconds for the changes to reflect).
-4. **Edit Device:** Click on the device name to edit its details.  You can change the name, IP address, and sensors. (Note: Cant edit the category for now).
-5. **Delete Device:** Click on the "Delete" button next to the device you want to remove.  Confirm the deletion in the popup dialog.
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/` | Serves the single-page application console. |
+| `GET` | `/devices` | Retrieves JSON array of monitored devices & active states. |
+| `POST` | `/devices` | Adds a new device to the inventory. |
+| `PUT` | `/devices/<id>` | Updates device IP, sensors, parent dependency, or category. |
+| `DELETE` | `/devices/<index>` | Removes a device from monitoring. |
+| `GET` | `/logs_json` | Returns real-time log entries in JSON format. |
+| `DELETE` | `/logs` | Clears all historical event logs (Admin required). |
+| `GET` | `/export_log` | Initiates CSV file download of monitoring log entries. |
+| `GET` | `/api/email/config` | Fetches SMTP alert notification settings. |
+| `POST` | `/api/email/config` | Saves SMTP configuration for alert dispatches. |
 
-## 📡 API Endpoints
+---
 
-RustPing provides a REST API for interacting with the application programmatically.
+## License
 
-| Method | Endpoint                     | Description                                      |
-| :----- | :--------------------------- | :----------------------------------------------- |
-| `GET`  | `/`                          | Serves the main dashboard HTML.                |
-| `GET`  | `/static/index.html`          | Serves the main dashboard HTML.                |
-| `GET`  | `/api/devices`               | Returns a JSON array of all monitored devices.   |
-| `POST` | `/api/devices`               | Adds a new device to the `devices.json` file.   |
-| `GET`  | `/export_log`              | Initiates a download of monitoring logs.      |
-| `GET`  | `/log_json`                  | Returns logs in JSON format.                   |
-| `GET`  | `/failed_log`                 | Returns logs for failed pings/HTTP checks.    |
-| `POST`  | `/update-password`           | Updates the user's password.                   |
-| `POST` | `/login` | For user login. |
-| `GET`    | `/logout`                     | Logs the current user out.                      |
-| `POST` | `/add_device`                | Adds a new device to the `devices.json` file.   |
-| `POST` | `/delete_device`             | Deletes a device from the `devices.json` file.  |
-| `POST` | `/update_device`             | Updates an existing device in the `devices.json` file. |
+Distributed under the **MIT License**. See `LICENSE` for details.
 
-## 🤝 Contributing
-
-Contributions are always welcome!  Here's how you can help:
-
-1.  **Fork the Repository:** Create a copy of the repository on your GitHub account.
-2.  **Create a Branch:**  Make your changes in a new branch: `git checkout -b my-feature-branch`
-3.  **Make Changes:** Implement your feature or fix the bug.
-4.  **Write Tests:**  Add tests to ensure your code works correctly and doesn't break existing functionality.
-5.  **Commit Changes:**  `git commit -m "Add a descriptive commit message"`
-6.  **Push to Your Fork:** `git push origin my-feature-branch`
-7.  **Submit a Pull Request:**  Open a pull request from your branch to the main RustPing repository.
-
-Please follow the [Rust style guidelines](https://doc.rust-lang.org/style-guide/).
-
-## 📄 License
-
-This project is licensed under the [MIT License](LICENSE).
+Maintained by the RustPing Project | [https://rustping.samsproject.in/](https://rustping.samsproject.in/)
