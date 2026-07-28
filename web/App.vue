@@ -64,6 +64,8 @@ function handleGraphMouseMove(e, dataset, titlePrefix, unit, subInfo) {
   const index = Math.min(Math.max(0, Math.floor(percent * dataset.length)), dataset.length - 1)
   const val = dataset[index]
 
+  const timestamp = chartTimestamps.value[index] || new Date().toLocaleTimeString('en-US', { hour12: false })
+
   let displayVal = val
   if (typeof val === 'number' && unit === 'Mbps') displayVal = `${(val * 10.2).toFixed(1)} Mbps`
   else if (typeof val === 'number' && unit === 'ms') displayVal = `${val} ms`
@@ -71,7 +73,7 @@ function handleGraphMouseMove(e, dataset, titlePrefix, unit, subInfo) {
 
   hoverTooltip.x = e.clientX
   hoverTooltip.y = e.clientY - 15
-  hoverTooltip.title = `${titlePrefix} · SAMPLE #${index + 1}`
+  hoverTooltip.title = `${titlePrefix} · TIME ${timestamp}`
   hoverTooltip.val = displayVal
   hoverTooltip.sub = subInfo
   hoverTooltip.visible = true
@@ -96,22 +98,78 @@ const defaultSettings = {
 const savedSettings = JSON.parse(localStorage.getItem('rustping-settings') || '{}')
 const userSettings = reactive({ ...defaultSettings, ...savedSettings })
 
-const throughputData = [22,31,27,46,39,58,51,72,64,81,70,88,77,91,83,96,86,92,79,89,72,84,68,76]
-const polylinePoints = computed(() => throughputData.map((n, i) => `${(i / (throughputData.length - 1)) * 100},${100 - n}`).join(' '))
+const chartTimestamps = ref(
+  Array.from({ length: 24 }, (_, i) => {
+    const d = new Date(Date.now() - (23 - i) * 5 * 1000)
+    return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+  })
+)
+
+const chartAxisLabels = computed(() => {
+  const ts = chartTimestamps.value
+  if (!ts.length) return ['--:--', '--:--', '--:--', 'NOW']
+  return [ts[0], ts[Math.floor(ts.length * 0.33)], ts[Math.floor(ts.length * 0.66)], ts[ts.length - 1]]
+})
+
+const throughputData = ref([22,31,27,46,39,58,51,72,64,81,70,88,77,91,83,96,86,92,79,89,72,84,68,76])
+const polylinePoints = computed(() => throughputData.value.map((n, i) => `${(i / (throughputData.value.length - 1)) * 100},${100 - n}`).join(' '))
 const polygonPoints = computed(() => `0,100 ${polylinePoints.value} 100,100`)
 
-const latencyData = [12,15,14,18,22,25,20,19,15,14,12,18,35,42,30,22,18,15,14,16,14,15,13,12]
-const latencyPolyline = computed(() => latencyData.map((n, i) => `${(i / (latencyData.length - 1)) * 100},${100 - (n * 2)}`).join(' '))
+const latencyData = ref([12,15,14,18,22,25,20,19,15,14,12,18,35,42,30,22,18,15,14,16,14,15,13,12])
+const latencyPolyline = computed(() => latencyData.value.map((n, i) => `${(i / (latencyData.value.length - 1)) * 100},${100 - Math.min(95, n * 2)}`).join(' '))
 const latencyPolygon = computed(() => `0,100 ${latencyPolyline.value} 100,100`)
 
-const uptimeHistory = Array.from({length: 90}, (_, i) => Math.random() > 0.05)
+const uptimeHistory = ref(Array.from({length: 90}, (_, i) => Math.random() > 0.05))
 
-const trafficIngress = [42,51,47,66,59,78,71,92,84,101,90,108,97,111,103,116,106,112,99,109,92,104,88,96]
-const trafficEgress = [22,31,27,46,39,58,51,72,64,81,70,88,77,91,83,96,86,92,79,89,72,84,68,76]
-const ingressPolyline = computed(() => trafficIngress.map((n, i) => `${(i / (trafficIngress.length - 1)) * 100},${100 - (n * 0.8)}`).join(' '))
+const trafficIngress = ref([42,51,47,66,59,78,71,92,84,101,90,108,97,111,103,116,106,112,99,109,92,104,88,96])
+const trafficEgress = ref([22,31,27,46,39,58,51,72,64,81,70,88,77,91,83,96,86,92,79,89,72,84,68,76])
+const ingressPolyline = computed(() => trafficIngress.value.map((n, i) => `${(i / (trafficIngress.value.length - 1)) * 100},${100 - Math.min(95, n * 0.8)}`).join(' '))
 const ingressPolygon = computed(() => `0,100 ${ingressPolyline.value} 100,100`)
-const egressPolyline = computed(() => trafficEgress.map((n, i) => `${(i / (trafficEgress.length - 1)) * 100},${100 - (n * 0.8)}`).join(' '))
+const egressPolyline = computed(() => trafficEgress.value.map((n, i) => `${(i / (trafficEgress.value.length - 1)) * 100},${100 - Math.min(95, n * 0.8)}`).join(' '))
 const egressPolygon = computed(() => `0,100 ${egressPolyline.value} 100,100`)
+
+function updateChartMetrics() {
+  if (!devices.value.length) return
+
+  const nowTime = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+  chartTimestamps.value.shift()
+  chartTimestamps.value.push(nowTime)
+
+  let totalBw = 0, bwCount = 0, totalLatency = 0, latencyCount = 0
+
+  devices.value.forEach(d => {
+    const bwVal = parseFloat(d.bandwidth || d.bandwidth_usage || d.throughput || 0)
+    if (!isNaN(bwVal) && bwVal > 0) {
+      totalBw += bwVal
+      bwCount++
+    }
+    const latVal = parseFloat(d.response_time || d.last_ping_ms || d.latency || 0)
+    if (!isNaN(latVal) && latVal > 0) {
+      totalLatency += latVal
+      latencyCount++
+    }
+  })
+
+  const avgBw = bwCount > 0 ? (totalBw / bwCount) : (Math.random() * 30 + 55)
+  const chartBw = Math.min(95, Math.max(10, Math.round(avgBw > 100 ? (avgBw / 10) : avgBw)))
+
+  throughputData.value.shift()
+  throughputData.value.push(chartBw)
+
+  trafficEgress.value.shift()
+  trafficEgress.value.push(chartBw)
+
+  trafficIngress.value.shift()
+  trafficIngress.value.push(Math.min(100, Math.round(chartBw * 1.2)))
+
+  const avgLat = latencyCount > 0 ? Math.round(totalLatency / latencyCount) : Math.round(Math.random() * 12 + 11)
+  latencyData.value.shift()
+  latencyData.value.push(avgLat)
+
+  const allUp = devices.value.every(d => d.ping_status === 'Up' || d.ping_status === true)
+  uptimeHistory.value.shift()
+  uptimeHistory.value.push(allUp)
+}
 
 const categoryStats = computed(() => {
   const counts = devices.value.reduce((acc, d) => { acc[d.category] = (acc[d.category] || 0) + 1; return acc; }, {})
@@ -325,8 +383,10 @@ async function loadDevices() {
     if (!response.ok) throw new Error()
     const data = await response.json()
     devices.value = data.length ? data : sampleDevices
+    updateChartMetrics()
   } catch {
     devices.value = sampleDevices
+    updateChartMetrics()
   } finally {
     loading.value = false
   }
@@ -955,7 +1015,7 @@ onBeforeUnmount(() => {
                       </svg>
                     </template>
                   </div>
-                  <div class="axis"><span>06:00</span><span>12:00</span><span>18:00</span><span>NOW</span></div></article>
+                  <div class="axis"><span v-for="(lbl, idx) in chartAxisLabels" :key="idx">{{ lbl }}</span></div></article>
                   
                 <article class="panel health-panel"><div class="panel-title"><div><small>FLEET STATE</small><h2>Overall health</h2></div><span>LIVE</span></div><div class="health-donut" :style="{'--health': `${health * 3.6}deg`}" @mouseenter="showGraphHover($event, 'FLEET HEALTH', `${health}% OPERATIONAL`, `${onlineCount} Online · ${offlineCount} Offline`)" @mouseleave="hideGraphHover"><div><strong>{{ health }}<sup>%</sup></strong><small>HEALTHY</small></div></div><div class="health-legend"><span><i></i>Online <b>{{ onlineCount }}</b></span><span><i></i>Offline <b>{{ offlineCount }}</b></span></div></article>
                 
@@ -980,7 +1040,7 @@ onBeforeUnmount(() => {
                       </svg>
                     </template>
                   </div>
-                  <div class="axis"><span>0ms</span><span>15ms</span><span>25ms</span><span>NOW</span></div></article>
+                  <div class="axis"><span v-for="(lbl, idx) in chartAxisLabels" :key="idx">{{ lbl }}</span></div></article>
                 
                 <article class="panel traffic-panel"><div class="panel-title"><div><small>BANDWIDTH</small><h2>Network Traffic</h2></div><span>LIVE</span></div>
                   <div class="traffic-bars" @mousemove="handleGraphMouseMove($event, [15,22,38,45,60,78,92,85,74,68,54,42], 'BANDWIDTH', 'Mbps', 'Real-time Gateway Aggregation')" @mouseleave="hideGraphHover">

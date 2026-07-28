@@ -541,5 +541,75 @@ input[type="checkbox"]{accent-color:var(--lime);cursor:pointer}
   color: #202720 !important;
 }
 
+/* Auth Copy (Left Side Brand Hero) - Always Dark Brand Aesthetic */
+.auth-copy {
+  background: radial-gradient(circle at 70% 40%, rgba(207,255,51,.07), transparent 34%), linear-gradient(90deg, #080a09, #0b0f0b) !important;
+  color: #f4f6f2 !important;
+}
+.auth-copy h1 {
+  color: #f4f6f2 !important;
+}
+.auth-copy h1 em {
+  color: #cfff33 !important;
+}
+.auth-copy > p {
+  color: #7d857e !important;
+}
+.auth-copy .eyebrow {
+  color: #cfff33 !important;
+}
+.auth-copy .eyebrow span {
+  background: #cfff33 !important;
+  box-shadow: 0 0 14px #cfff33 !important;
+}
+.auth-metric {
+  background: rgba(13, 17, 14, 0.94) !important;
+  border: 1px solid #222a23 !important;
+  color: #f4f6f2 !important;
+}
+.auth-metric > span {
+  border-color: #344026 !important;
+  color: #cfff33 !important;
+  background: transparent !important;
+}
+.auth-metric small {
+  color: #606961 !important;
+}
+.auth-metric strong {
+  color: #ffffff !important;
+}
+
+/* Login Panel (Right Side Form) */
+.login-panel {
+  background: #f4f5f0 !important;
+  color: #0c0e0c !important;
+}
+.login-panel > div small {
+  color: #61702d !important;
+}
+.login-panel h2 {
+  color: #0c0e0c !important;
+}
+.login-panel p {
+  color: #555c56 !important;
+}
+.login-panel label {
+  color: #283228 !important;
+  font-weight: 600 !important;
+}
+.login-panel input {
+  color: #0c0e0c !important;
+  background: #ffffff !important;
+  border: 1px solid #c8cac2 !important;
+}
+.login-panel input::placeholder {
+  color: #889088 !important;
+}
+.login-panel input:focus {
+  border-color: #789b00 !important;
+  box-shadow: 0 0 0 3px rgba(120, 155, 0, 0.18) !important;
+}
+
+
 
 
