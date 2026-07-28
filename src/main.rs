@@ -10,8 +10,8 @@ use rocket::{get, post, delete, put, routes, State, catch, catchers};
 use rocket::serde::json::Json;
 use rocket::fs::{NamedFile, FileServer, relative};
 use models::{Device as ModelDevice, SensorType, User, UserRole, UserPermissions, SiteSettings, StatusPage, MaintenanceWindow, AuditLog};
-use log::{info, error};
-use sensors::{monitor_ping, monitor_http, monitor_tcp_port, monitor_ssl_cert, monitor_dns_resolution, monitor_database_port};
+use log::{info, error, debug};
+use sensors::*;
 use db::Database;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
@@ -798,6 +798,71 @@ async fn main() {
                         } else {
                             None
                         };
+
+                        // 1. SSH Server Probe
+                        if dev.sensors.contains(&SensorType::Ssh) {
+                            let p = dev.port.unwrap_or(22);
+                            let res = monitor_ssh(&dev.ip, p).await;
+                            debug!("SSH check for {}: {}", dev.name, res);
+                        }
+
+                        // 2. SMTP Mail Probe
+                        if dev.sensors.contains(&SensorType::Smtp) {
+                            let p = dev.port.unwrap_or(25);
+                            let res = monitor_smtp(&dev.ip, p).await;
+                            debug!("SMTP check for {}: {}", dev.name, res);
+                        }
+
+                        // 3. NTP Time Probe
+                        if dev.sensors.contains(&SensorType::Ntp) {
+                            let res = monitor_ntp(&dev.ip).await;
+                            debug!("NTP check for {}: {}", dev.name, res);
+                        }
+
+                        // 4. FTP Probe
+                        if dev.sensors.contains(&SensorType::Ftp) {
+                            let p = dev.port.unwrap_or(21);
+                            let res = monitor_ftp(&dev.ip, p).await;
+                            debug!("FTP check for {}: {}", dev.name, res);
+                        }
+
+                        // 5. Jitter Probe
+                        if dev.sensors.contains(&SensorType::Jitter) {
+                            let res = monitor_jitter(&dev.ip).await;
+                            debug!("Jitter check for {}: {}", dev.name, res);
+                        }
+
+                        // 6. HTTP Latency TTFB Probe
+                        if dev.sensors.contains(&SensorType::HttpLatency) {
+                            let target_url = dev.http_path.as_deref().unwrap_or(&dev.ip);
+                            let res = monitor_http_latency(target_url).await;
+                            debug!("HTTP TTFB check for {}: {}", dev.name, res);
+                        }
+
+                        // 7. Packet Loss Probe
+                        if dev.sensors.contains(&SensorType::PacketLoss) {
+                            let res = monitor_packet_loss(&dev.ip).await;
+                            debug!("Packet loss check for {}: {}", dev.name, res);
+                        }
+
+                        // 8. CPU & Memory Load Probe
+                        if dev.sensors.contains(&SensorType::CpuLoad) {
+                            let res = monitor_cpu_load(&dev.ip).await;
+                            debug!("CPU Load check for {}: {}", dev.name, res);
+                        }
+
+                        // 9. Disk Space Storage Probe
+                        if dev.sensors.contains(&SensorType::DiskSpace) {
+                            let res = monitor_disk_space(&dev.ip).await;
+                            debug!("Disk space check for {}: {}", dev.name, res);
+                        }
+
+                        // 10. WebSocket Endpoint Probe
+                        if dev.sensors.contains(&SensorType::WebSocket) {
+                            let target_url = dev.http_path.as_deref().unwrap_or(&dev.ip);
+                            let res = monitor_websocket(target_url).await;
+                            debug!("WebSocket check for {}: {}", dev.name, res);
+                        }
 
                         (dev, ping_result_str, http_status, bandwidth_usage, ssl_status, dns_status, db_status)
                     }

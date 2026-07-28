@@ -12,6 +12,16 @@ pub enum SensorType {
     SslCert,
     Dns,
     Database,
+    Ssh,
+    Smtp,
+    Ntp,
+    Ftp,
+    Jitter,
+    HttpLatency,
+    PacketLoss,
+    CpuLoad,
+    DiskSpace,
+    WebSocket,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

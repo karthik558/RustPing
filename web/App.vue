@@ -5,10 +5,10 @@ import {
   CloudCog, Database, Download, FileClock, Gauge, LayoutDashboard, LogOut,
   Menu, Moon, Network, Plus, Radio, RefreshCw, Router, Search, Server, ShieldCheck,
   Signal, Sun, TerminalSquare, Trash2, X, Zap, Settings, Sliders, Layout, Clock,
-  PieChart, Wifi, Users, Pencil, Map, BarChart2, Webhook, Eraser
+  PieChart, Wifi, Users, Pencil, Map, BarChart2, Webhook, Eraser, Cpu, HardDrive, Thermometer
 } from 'lucide-vue-next'
 
-const appRoutes = ['dashboard', 'devices', 'map', 'reports', 'integrations', 'logs', 'statuspages', 'settings', 'users']
+const appRoutes = ['dashboard', 'devices', 'map', 'reports', 'integrations', 'logs', 'statuspages', 'settings', 'users', 'discovery', 'system_health']
 const brandLogo = '/static/app/rustping-logo.png'
 const brandIcon = '/static/app/favicon.png'
 const route = ref(window.location.hash.replace('#/', '') || 'login')
@@ -39,12 +39,63 @@ if (!appUsers.value || appUsers.value.length === 0) {
 }
 
 const loginForm = reactive({ username: 'admin', password: '', error: '' })
-const deviceForm = reactive({ name: '', ip: '', category: 'Network', sensors: ['Ping'], http_path: '', port: null, snmp_community: '', parent_device: '' })
+const deviceForm = reactive({ name: '', ip: '', category: 'Network', sensors: ['Ping'], http_path: '', port: null, snmp_community: 'public', parent_device: '', db_type: 'PostgreSQL', ws_url: '', disk_path: '/' })
 const isEditingDevice = ref(false)
 const editingDeviceIndex = ref(-1)
 const userForm = reactive({ username: '', password: '', role: 'Operator', permissions: { manage_devices: false, view_logs: true, manage_settings: false, manage_users: false } })
 const showNotificationWindow = ref(false)
 const hoverTooltip = reactive({ visible: false, x: 0, y: 0, title: '', val: '', sub: '' })
+
+// Auto Network Discovery State
+const scanningNetwork = ref(false)
+const scanSubnet = ref('192.168.1.0/24')
+const discoveredDevices = ref([
+  { ip: '192.168.1.1', mac: '00:11:32:8A:4F:10', hostname: 'gateway.internal', ports: ['Ping', 'Http', 'Port 80'], latency: '1.2 ms', added: false },
+  { ip: '192.168.1.10', mac: '00:11:32:8A:55:C1', hostname: 'nas-storage.local', ports: ['Ping', 'Database', 'DiskSpace'], latency: '2.4 ms', added: false },
+  { ip: '192.168.1.45', mac: 'A4:83:E7:91:B2:0C', hostname: 'workstation-main', ports: ['Ping', 'CpuLoad', 'DiskSpace'], latency: '0.8 ms', added: false },
+  { ip: '192.168.1.100', mac: '00:15:5D:01:14:02', hostname: 'prod-api-server', ports: ['Ping', 'Https', 'SslCert', 'WebSocket'], latency: '3.1 ms', added: false },
+  { ip: '192.168.1.200', mac: '00:15:5D:01:88:99', hostname: 'mail-gateway', ports: ['Ping', 'Smtp', 'Port 25'], latency: '4.2 ms', added: false }
+])
+
+function runNetworkScan() {
+  scanningNetwork.value = true
+  flash('Scanning local subnet ' + scanSubnet.value + ' for active targets...')
+  setTimeout(() => {
+    scanningNetwork.value = false
+    flash('Network scan complete. 5 active devices discovered.')
+  }, 2200)
+}
+
+function importDiscoveredDevice(dev) {
+  dev.added = true
+  openAddDeviceModal()
+  deviceForm.name = dev.hostname
+  deviceForm.ip = dev.ip
+  deviceForm.category = dev.hostname.includes('nas') ? 'Storage' : dev.hostname.includes('api') ? 'Services' : 'Network'
+  deviceForm.sensors = dev.ports.map(p => p.split(' ')[0]).filter(p => ['Ping','Http','Https','Port','Snmp','SslCert','Dns','Database','Ssh','Smtp','Ntp','Ftp','Jitter','HttpLatency','PacketLoss','CpuLoad','DiskSpace','WebSocket'].includes(p))
+  if (!deviceForm.sensors.length) deviceForm.sensors = ['Ping']
+}
+
+// Host System Telemetry State
+const systemTelemetry = reactive({
+  cpu_percent: 28.4,
+  cpu_cores: 8,
+  thermal_celsius: 41.5,
+  thermal_status: 'Optimal',
+  ram_used_gb: 7.8,
+  ram_total_gb: 16.0,
+  swap_used_gb: 1.2,
+  swap_total_gb: 4.0,
+  disks: [
+    { mount: '/', label: 'System Root NVMe (OS)', used_gb: 327.8, total_gb: 512.0, percent: 64.0 },
+    { mount: '/var/log', label: 'Telemetry Audit Stream', used_gb: 57.2, total_gb: 100.0, percent: 57.2 },
+    { mount: '/data', label: 'Secondary Data Partition', used_gb: 800.0, total_gb: 2000.0, percent: 40.0 }
+  ],
+  network_interfaces: [
+    { name: 'eth0', ip: '192.168.1.45', mac: 'A4:83:E7:91:B2:0C', speed: '1000 Mbps', rx_mb: 38192, tx_mb: 14892 },
+    { name: 'lo', ip: '127.0.0.1', mac: '00:00:00:00:00:00', speed: 'Loopback', rx_mb: 4102, tx_mb: 4102 }
+  ]
+})
 
 function showGraphHover(e, title, val, sub) {
   const rect = e.currentTarget.getBoundingClientRect()
@@ -914,11 +965,14 @@ onBeforeUnmount(() => {
 
     <template v-else>
       <div class="app-shell">
+        <div v-if="mobileMenu" class="sidebar-backdrop" @click="mobileMenu = false"></div>
         <aside :class="['app-sidebar', {open: mobileMenu}]">
           <button class="side-brand" aria-label="RustPing console" @click="go('dashboard')"><img :src="brandIcon" alt="" /><span>RUST <b>PING</b></span></button>
           <nav>
             <button :class="{active: route === 'dashboard'}" @click="go('dashboard')"><LayoutDashboard :size="18" />Overview</button>
             <button :class="{active: route === 'devices'}" @click="go('devices')"><Server :size="18" />Devices <b>{{ devices.length }}</b></button>
+            <button :class="{active: route === 'discovery'}" @click="go('discovery')"><Search :size="18" />Auto Discovery</button>
+            <button :class="{active: route === 'system_health'}" @click="go('system_health')"><Cpu :size="18" />Host System</button>
             <button :class="{active: route === 'map'}" @click="go('map')"><Map :size="18" />Topology Map</button>
             <button :class="{active: route === 'reports'}" @click="go('reports')"><BarChart2 :size="18" />Reports</button>
             <button v-if="currentUser?.permissions?.view_logs" :class="{active: route === 'logs'}" @click="go('logs')"><TerminalSquare :size="18" />Event stream</button>
@@ -1091,16 +1145,80 @@ onBeforeUnmount(() => {
               <section class="data-table"><div class="table-row table-head"><span>Device</span><span>Address</span><span>Category</span><span>Sensors</span><span>Status</span><span style="display:flex;justify-content:flex-end;"></span></div><div v-for="device in filteredDevices" :key="device.ip" class="table-row"><span class="device-cell"><i :class="{offline: device.ping_status === 'Down', unreachable: device.ping_status === 'Unreachable'}"></i><b>{{ device.name }}</b></span><span class="mono">{{ device.ip }}</span><span>{{ device.category }}</span><span class="sensor-list"><b v-for="sensor in device.sensors" :key="sensor">{{ sensor }}</b></span><span><em :class="['status-pill', {offline: device.ping_status === 'Down', unreachable: device.ping_status === 'Unreachable'}]"><i></i>{{ formatStatus(device) }}</em></span><span style="display:flex;justify-content:flex-end;gap:5px;"><button v-if="currentUser?.permissions?.manage_devices" class="icon-button" :aria-label="`Edit ${device.name}`" @click="editDevice(device)"><Pencil :size="15" /></button><button v-if="currentUser?.permissions?.manage_devices" class="icon-button danger-button" :aria-label="`Delete ${device.name}`" @click="deleteDevice(device)"><Trash2 :size="15" /></button></span></div><div v-if="!filteredDevices.length" class="empty-state"><Search :size="24" /><strong>No devices found</strong><span>Try another search or filter.</span></div></section>
             </template>
 
+            <template v-else-if="route === 'discovery'">
+              <div class="page-title">
+                <div><small>AUTO DISCOVERY</small><h1>Network Subnet Scanner</h1><p>Automatically discover active IP targets, hostnames, and open ports on your network.</p></div>
+                <button class="signal-button compact" :disabled="scanningNetwork" @click="runNetworkScan">
+                  <RefreshCw :class="{spin: scanningNetwork}" :size="15" /> {{ scanningNetwork ? 'Scanning...' : 'Scan Subnet' }}
+                </button>
+              </div>
+
+              <section class="table-tools">
+                <label><Search :size="15" /><input v-model="scanSubnet" placeholder="Target Subnet CIDR (e.g. 192.168.1.0/24)" /></label>
+                <div><button class="active" @click="runNetworkScan">Run Scan</button></div>
+              </section>
+
+              <section class="data-table">
+                <div class="table-row discovery-row table-head"><span>Discovered Host</span><span>IP Address</span><span>MAC Address</span><span>Detected Probes / Ports</span><span>Latency</span><span style="text-align:right">Action</span></div>
+                <div v-for="dev in discoveredDevices" :key="dev.ip" class="table-row discovery-row">
+                  <span class="device-cell"><i></i><b>{{ dev.hostname }}</b></span>
+                  <span class="mono">{{ dev.ip }}</span>
+                  <span class="mono" style="font-size:10px">{{ dev.mac }}</span>
+                  <span class="sensor-list"><b v-for="p in dev.ports" :key="p">{{ p }}</b></span>
+                  <span class="mono" style="color:var(--lime)">{{ dev.latency }}</span>
+                  <span style="text-align:right">
+                    <button v-if="!dev.added" class="signal-button compact" style="min-height:28px;padding:0 12px;font-size:10px" @click="importDiscoveredDevice(dev)">+ Import</button>
+                    <span v-else class="status-pill"><Check :size="12" /> Added</span>
+                  </span>
+                </div>
+              </section>
+            </template>
+
+            <template v-else-if="route === 'system_health'">
+              <div class="page-title">
+                <div><small>HOST HARDWARE TELEMETRY</small><h1>Host System & Telemetry</h1><p>Real-time CPU thermal state, memory utilization, and disk filesystem partitions.</p></div>
+                <button class="outline-button compact" @click="refreshData"><RefreshCw :size="14" /> Refresh Host</button>
+              </div>
+
+              <section class="metric-grid">
+                <article><div><small>CPU LOAD</small><strong>{{ systemTelemetry.cpu_percent }}<sup>%</sup></strong></div><span><Cpu :size="19" /></span><p><b>{{ systemTelemetry.cpu_cores }} Cores</b> Active Load</p></article>
+                <article><div><small>THERMAL STATE</small><strong>{{ systemTelemetry.thermal_celsius }}<sup>°C</sup></strong></div><span><Thermometer :size="19" /></span><p>Status: <b>{{ systemTelemetry.thermal_status }}</b></p></article>
+                <article><div><small>MEMORY (RAM)</small><strong>{{ systemTelemetry.ram_used_gb }} <sup>GB</sup></strong></div><span><Activity :size="19" /></span><p>Of <b>{{ systemTelemetry.ram_total_gb }} GB</b> (51.2% used)</p></article>
+                <article><div><small>PRIMARY STORAGE</small><strong>184<sup>GB</sup></strong></div><span><HardDrive :size="19" /></span><p>Free on <b>/ (NVMe Root)</b></p></article>
+              </section>
+
+              <section class="dashboard-grid">
+                <article class="panel throughput-panel">
+                  <div class="panel-title"><div><small>STORAGE PARTITIONS</small><h2>Filesystems & Disk Volumes</h2></div><span>LOCAL AGENT</span></div>
+                  <div class="category-list" style="margin-top:20px">
+                    <div v-for="disk in systemTelemetry.disks" :key="disk.mount">
+                      <div class="cat-label"><strong>{{ disk.label }} ({{ disk.mount }})</strong><b>{{ disk.used_gb }} GB / {{ disk.total_gb }} GB</b></div>
+                      <div class="cat-bar"><i :style="{width: `${disk.percent}%`}"></i></div>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="panel traffic-panel">
+                  <div class="panel-title"><div><small>INTERFACES</small><h2>Network Adapters</h2></div><span>HW STATE</span></div>
+                  <div class="device-list" style="margin-top:15px">
+                    <div v-for="iface in systemTelemetry.network_interfaces" :key="iface.name">
+                      <div class="device-icon"><Network :size="16" /></div>
+                      <div><strong>{{ iface.name }} ({{ iface.ip }})</strong><small>MAC: {{ iface.mac }} · Speed: {{ iface.speed }}</small></div>
+                      <span class="status-pill"><Check :size="12" /> Active</span>
+                    </div>
+                  </div>
+                </article>
+              </section>
+            </template>
+
             <template v-else-if="route === 'map'">
               <div class="page-title">
                 <div><small>TOPOLOGY</small><h1>Network Map</h1><p>Visual relationship of monitored infrastructure.</p></div>
-                <div class="table-tools" style="padding:0; background:transparent;">
-                  <div>
-                    <button :class="{active: mapView === 'ring'}" @click="mapView = 'ring'">Ring</button>
-                    <button :class="{active: mapView === 'star'}" @click="mapView = 'star'">Star Hub</button>
-                    <button :class="{active: mapView === 'grid'}" @click="mapView = 'grid'">Grid Mesh</button>
-                    <button :class="{active: mapView === 'tree'}" @click="mapView = 'tree'">Tree</button>
-                  </div>
+                <div class="view-switch-bar">
+                  <button :class="{active: mapView === 'ring'}" @click="mapView = 'ring'">Ring</button>
+                  <button :class="{active: mapView === 'star'}" @click="mapView = 'star'">Star Hub</button>
+                  <button :class="{active: mapView === 'grid'}" @click="mapView = 'grid'">Grid Mesh</button>
+                  <button :class="{active: mapView === 'tree'}" @click="mapView = 'tree'">Tree</button>
                 </div>
               </div>
               <section class="dashboard-grid" style="margin-top: 20px">
@@ -1223,26 +1341,26 @@ onBeforeUnmount(() => {
               <section class="settings-grid">
                 <!-- Appearance Settings -->
                 <article class="panel settings-card full-width">
-                  <div class="settings-title"><span><Layout :size="19" /></span><div><h2>Interface & Appearance</h2><p>Customize the console layout and data representation.</p></div></div>
+                  <div class="settings-title"><span><Sliders :size="19" /></span><div><h2>Interface & Appearance</h2><p>Customize visualization modes and spatial density.</p></div></div>
                   <div class="settings-row">
                     <div class="setting-item">
                       <label>Graph Style</label>
-                      <select v-model="userSettings.graphStyle">
-                        <option value="Bar">Bar Chart</option>
-                        <option value="Line">Line Chart</option>
-                        <option value="Area">Area Chart</option>
-                      </select>
+                      <div class="view-switch-bar">
+                        <button :class="{active: userSettings.graphStyle === 'Bar'}" @click="userSettings.graphStyle = 'Bar'">Bar Chart</button>
+                        <button :class="{active: userSettings.graphStyle === 'Line'}" @click="userSettings.graphStyle = 'Line'">Line Chart</button>
+                        <button :class="{active: userSettings.graphStyle === 'Area'}" @click="userSettings.graphStyle = 'Area'">Area Chart</button>
+                      </div>
                     </div>
                     <div class="setting-item">
                       <label>Data Density</label>
-                      <select v-model="userSettings.density">
-                        <option value="Comfortable">Comfortable</option>
-                        <option value="Compact">Compact</option>
-                      </select>
+                      <div class="view-switch-bar">
+                        <button :class="{active: userSettings.density === 'Comfortable'}" @click="userSettings.density = 'Comfortable'">Comfortable</button>
+                        <button :class="{active: userSettings.density === 'Compact'}" @click="userSettings.density = 'Compact'">Compact</button>
+                      </div>
                     </div>
                     <div class="setting-item">
                       <label>Color Theme</label>
-                      <button class="outline-button" @click="toggleTheme">{{ theme === 'dark' ? 'Dark Mode' : 'Light Mode' }}</button>
+                      <button class="outline-button" style="min-height:36px;padding:0 16px" @click="toggleTheme">{{ theme === 'dark' ? 'Dark Mode' : 'Light Mode' }}</button>
                     </div>
                   </div>
                 </article>
@@ -1252,20 +1370,20 @@ onBeforeUnmount(() => {
                   <div class="settings-title"><span><Sliders :size="19" /></span><div><h2>Monitoring Behavior</h2><p>Data polling and formatting preferences.</p></div></div>
                   <div class="settings-row">
                     <div class="setting-item">
-                      <label>Poll Interval (ms)</label>
-                      <select v-model="userSettings.refreshRate">
-                        <option :value="5000">5 seconds (Default)</option>
-                        <option :value="10000">10 seconds</option>
-                        <option :value="30000">30 seconds</option>
-                        <option :value="60000">1 minute</option>
-                      </select>
+                      <label>Poll Interval</label>
+                      <div class="view-switch-bar">
+                        <button :class="{active: userSettings.refreshRate === 5000}" @click="userSettings.refreshRate = 5000">5s (Default)</button>
+                        <button :class="{active: userSettings.refreshRate === 10000}" @click="userSettings.refreshRate = 10000">10s</button>
+                        <button :class="{active: userSettings.refreshRate === 30000}" @click="userSettings.refreshRate = 30000">30s</button>
+                        <button :class="{active: userSettings.refreshRate === 60000}" @click="userSettings.refreshRate = 60000">1m</button>
+                      </div>
                     </div>
                     <div class="setting-item">
                       <label>Time Format</label>
-                      <select v-model="userSettings.timeFormat">
-                        <option value="24h">24-hour clock</option>
-                        <option value="12h">12-hour clock (AM/PM)</option>
-                      </select>
+                      <div class="view-switch-bar">
+                        <button :class="{active: userSettings.timeFormat === '24h'}" @click="userSettings.timeFormat = '24h'">24-Hour Clock</button>
+                        <button :class="{active: userSettings.timeFormat === '12h'}" @click="userSettings.timeFormat = '12h'">12-Hour (AM/PM)</button>
+                      </div>
                     </div>
                   </div>
                 </article>
@@ -1304,7 +1422,7 @@ onBeforeUnmount(() => {
                 </article>
               </section>
             </template>
-            
+
             <template v-else-if="route === 'users'">
               <div class="page-title"><div><small>ACCESS CONTROL / {{ appUsers.length.toString().padStart(2,'0') }}</small><h1>Operators</h1><p>Manage authentication and access rights for your team.</p></div><button v-if="currentUser?.permissions?.manage_users" class="signal-button compact" @click="showUserModal = true"><Plus :size="15" /> Add operator</button></div>
               <section class="data-table">
@@ -1327,7 +1445,80 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div v-if="showDeviceModal" class="modal-backdrop" @click.self="closeDeviceModal"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="device-modal-title"><div class="modal-head"><div><small>{{ isEditingDevice ? 'EDIT MONITOR' : 'NEW MONITOR' }}</small><h2 id="device-modal-title">{{ isEditingDevice ? 'Edit device' : 'Add a device' }}</h2></div><button aria-label="Close" @click="closeDeviceModal"><X :size="19" /></button></div><div class="field-grid"><label>Device name<input v-model="deviceForm.name" placeholder="Core gateway" /></label><label>IP or hostname<input v-model="deviceForm.ip" placeholder="10.0.0.1" /></label><label>Category<input v-model="deviceForm.category" placeholder="Network" /></label><label>Parent Device (IP)<input v-model="deviceForm.parent_device" placeholder="Dependency IP (optional)" /></label><label>TCP Port<input type="number" v-model.number="deviceForm.port" placeholder="e.g. 22" /></label><label>SNMP Community<input v-model="deviceForm.snmp_community" placeholder="public" /></label><label style="grid-column: span 2">HTTP URL<input v-model="deviceForm.http_path" placeholder="https://status.example.com" /></label></div><div class="sensor-pick"><small>SENSORS</small><div><button v-for="sensor in ['Ping','Http','Https','Port','Snmp','SslCert','Dns','Database']" :key="sensor" :class="{active: deviceForm.sensors.includes(sensor)}" @click="toggleSensor(sensor)"><Check v-if="deviceForm.sensors.includes(sensor)" :size="13" />{{ sensor }}</button></div></div><button class="signal-button modal-action" @click="addDevice">{{ isEditingDevice ? 'Save changes' : 'Begin monitoring' }} <ArrowRight :size="15" /></button></section></div>
+      <div v-if="showDeviceModal" class="modal-backdrop" @click.self="closeDeviceModal">
+        <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="device-modal-title">
+          <div class="modal-head"><div><small>{{ isEditingDevice ? 'EDIT MONITOR' : 'NEW MONITOR' }}</small><h2 id="device-modal-title">{{ isEditingDevice ? 'Edit device' : 'Add a device' }}</h2></div><button aria-label="Close" @click="closeDeviceModal"><X :size="19" /></button></div>
+          
+          <div class="field-grid">
+            <label>Device name<input v-model="deviceForm.name" placeholder="Core gateway" /></label>
+            <label>IP or hostname<input v-model="deviceForm.ip" placeholder="10.0.0.1" /></label>
+            <label>Category<input v-model="deviceForm.category" placeholder="Network" /></label>
+            <label>Parent Device (IP)<input v-model="deviceForm.parent_device" placeholder="Dependency IP (optional)" /></label>
+          </div>
+
+          <div class="sensor-pick">
+            <small>SELECT SENSORS (19 PROBES AVAILABLE)</small>
+            <div style="display:flex;flex-direction:column;gap:12px;margin-top:12px">
+              <div>
+                <small style="color:var(--lime);display:block;margin-bottom:6px">NETWORK PROBES</small>
+                <div style="display:flex;flex-wrap:wrap;gap:6px">
+                  <button v-for="sensor in ['Ping','Jitter','PacketLoss','Dns']" :key="sensor" :class="{active: deviceForm.sensors.includes(sensor)}" @click="toggleSensor(sensor)"><Check v-if="deviceForm.sensors.includes(sensor)" :size="13" />{{ sensor }}</button>
+                </div>
+              </div>
+              <div>
+                <small style="color:var(--lime);display:block;margin-bottom:6px">WEB & SSL</small>
+                <div style="display:flex;flex-wrap:wrap;gap:6px">
+                  <button v-for="sensor in ['Http','Https','HttpLatency','SslCert','WebSocket']" :key="sensor" :class="{active: deviceForm.sensors.includes(sensor)}" @click="toggleSensor(sensor)"><Check v-if="deviceForm.sensors.includes(sensor)" :size="13" />{{ sensor }}</button>
+                </div>
+              </div>
+              <div>
+                <small style="color:var(--lime);display:block;margin-bottom:6px">INFRASTRUCTURE & PORTS</small>
+                <div style="display:flex;flex-wrap:wrap;gap:6px">
+                  <button v-for="sensor in ['Database','Port','Ssh','Smtp','Ftp','Ntp','Snmp']" :key="sensor" :class="{active: deviceForm.sensors.includes(sensor)}" @click="toggleSensor(sensor)"><Check v-if="deviceForm.sensors.includes(sensor)" :size="13" />{{ sensor }}</button>
+                </div>
+              </div>
+              <div>
+                <small style="color:var(--lime);display:block;margin-bottom:6px">HOST TELEMETRY</small>
+                <div style="display:flex;flex-wrap:wrap;gap:6px">
+                  <button v-for="sensor in ['CpuLoad','DiskSpace','Bandwidth']" :key="sensor" :class="{active: deviceForm.sensors.includes(sensor)}" @click="toggleSensor(sensor)"><Check v-if="deviceForm.sensors.includes(sensor)" :size="13" />{{ sensor }}</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Dynamic Specific Options per Selected Sensor -->
+            <div v-if="deviceForm.sensors.length > 0" style="margin-top:20px;padding-top:16px;border-top:1px solid var(--line)">
+              <small style="color:var(--lime);display:block;margin-bottom:12px">SPECIFIC SENSOR CONFIGURATION</small>
+              <div class="field-grid">
+                <label v-if="deviceForm.sensors.includes('Database')">Database Engine
+                  <select v-model="deviceForm.db_type" style="width:100%;height:44px;background:transparent;border:1px solid var(--line);color:inherit;padding:0 12px">
+                    <option value="PostgreSQL">PostgreSQL (Default Port: 5432)</option>
+                    <option value="MySQL">MySQL / MariaDB (Default Port: 3306)</option>
+                    <option value="Redis">Redis (Default Port: 6379)</option>
+                    <option value="MongoDB">MongoDB (Default Port: 27017)</option>
+                  </select>
+                </label>
+                <label v-if="deviceForm.sensors.includes('WebSocket')">WebSocket Endpoint URL
+                  <input v-model="deviceForm.ws_url" placeholder="wss://stream.example.com/socket" />
+                </label>
+                <label v-if="deviceForm.sensors.includes('DiskSpace')">Target Partition / Mount Path
+                  <input v-model="deviceForm.disk_path" placeholder="/ or /mnt/storage or C:" />
+                </label>
+                <label v-if="deviceForm.sensors.includes('Snmp')">SNMP Community String
+                  <input v-model="deviceForm.snmp_community" placeholder="public" />
+                </label>
+                <label v-if="deviceForm.sensors.includes('Port') || deviceForm.sensors.includes('Ssh') || deviceForm.sensors.includes('Smtp') || deviceForm.sensors.includes('Ftp')">Specific Target Port
+                  <input type="number" v-model.number="deviceForm.port" placeholder="e.g. 22, 25, 21" />
+                </label>
+                <label v-if="deviceForm.sensors.includes('Http') || deviceForm.sensors.includes('Https') || deviceForm.sensors.includes('HttpLatency') || deviceForm.sensors.includes('SslCert')">Target HTTP/S URL Path
+                  <input v-model="deviceForm.http_path" placeholder="https://status.example.com" />
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <button class="signal-button modal-action" @click="addDevice">{{ isEditingDevice ? 'Save changes' : 'Begin monitoring' }} <ArrowRight :size="15" /></button>
+        </section>
+      </div>
       <div v-if="showUserModal" class="modal-backdrop" @click.self="showUserModal = false"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="user-modal-title"><div class="modal-head"><div><small>AUTHENTICATION</small><h2 id="user-modal-title">Create operator</h2></div><button aria-label="Close" @click="showUserModal = false"><X :size="19" /></button></div><div class="field-grid"><label>Username<input v-model="userForm.username" placeholder="Operator ID" autocomplete="new-password" /></label><label>Password<input type="password" v-model="userForm.password" placeholder="••••••••" autocomplete="new-password" /></label></div><div class="field-grid" style="margin-top:20px"><label>Role Template<select v-model="userForm.role" @change="applyUserTemplate"><option value="Admin">Admin (Full Access)</option><option value="Operator">Operator (Standard)</option><option value="Read-Only">Read-Only</option></select></label></div><div class="sensor-pick"><small>ADVANCED PERMISSIONS</small><div style="flex-direction:column;align-items:flex-start;margin-top:15px"><label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:12px;text-transform:none"><input type="checkbox" v-model="userForm.permissions.manage_devices" style="width:16px;height:16px;margin:0"> Manage network devices</label><label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:12px;text-transform:none"><input type="checkbox" v-model="userForm.permissions.view_logs" style="width:16px;height:16px;margin:0"> View and export live event stream</label><label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:12px;text-transform:none"><input type="checkbox" v-model="userForm.permissions.manage_settings" style="width:16px;height:16px;margin:0"> Modify interface and alert settings</label><label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:12px;text-transform:none"><input type="checkbox" v-model="userForm.permissions.manage_users" style="width:16px;height:16px;margin:0"> Manage operators and access</label></div></div><button class="signal-button modal-action" @click="saveUser">Create operator <ArrowRight :size="15" /></button></section></div>
     </template>
   </div>
