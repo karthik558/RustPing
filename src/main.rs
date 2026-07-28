@@ -446,6 +446,16 @@ async fn login_user(jar: &CookieJar<'_>, login_req: Json<LoginReq>, db: &State<D
     }
 }
 
+#[get("/favicon.ico")]
+async fn favicon_ico() -> Option<NamedFile> {
+    NamedFile::open(Path::new("static/app/favicon.png")).await.ok()
+}
+
+#[get("/favicon.png")]
+async fn favicon_png() -> Option<NamedFile> {
+    NamedFile::open(Path::new("static/app/favicon.png")).await.ok()
+}
+
 #[derive(Deserialize)]
 struct ChangePasswordReq {
     username: String,
@@ -455,16 +465,26 @@ struct ChangePasswordReq {
 
 #[post("/api/user/change-password", data = "<req>")]
 async fn change_password(_auth: Auth, req: Json<ChangePasswordReq>, db: &State<Database>) -> Status {
+    info!("Password change request for user: {}", req.username);
     match db.authenticate_user(&req.username, &req.old_password_hash) {
         Ok(Some(_user)) => {
             if let Ok(true) = db.update_user_password(&req.username, &req.new_password_hash) {
                 let _ = db.log_audit(&req.username, "CHANGE_PASSWORD", &format!("Password updated for user {}", req.username));
+                info!("Password successfully updated for user {}", req.username);
                 Status::Ok
             } else {
+                error!("Failed to update user password in database for {}", req.username);
                 Status::InternalServerError
             }
         }
-        _ => Status::Unauthorized,
+        Ok(None) => {
+            error!("Authentication failed for password change (old password mismatch) for user {}", req.username);
+            Status::Unauthorized
+        }
+        Err(e) => {
+            error!("Database error during password change: {}", e);
+            Status::InternalServerError
+        }
     }
 }
 
@@ -654,6 +674,8 @@ async fn main() {
         .mount("/", routes![
             index,
             login_page,
+            favicon_ico,
+            favicon_png,
             get_devices,
             export_log,
             logs_json,

@@ -122,6 +122,10 @@ impl Database {
             "
         )?;
 
+        let _ = conn.execute("ALTER TABLE users ADD COLUMN username TEXT", []);
+        let _ = conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT", []);
+        let _ = conn.execute("ALTER TABLE users ADD COLUMN permissions TEXT", []);
+
         info!("Database schema initialized successfully.");
         Ok(())
     }
@@ -157,17 +161,24 @@ impl Database {
         };
 
         // Seed Admin user if empty (default username: admin, default pass_hash for 'admin')
-        let user_count: i64 = conn.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))?;
+        let default_perms = serde_json::to_string(&UserPermissions::default()).unwrap_or_default();
+        let default_hash = "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"; // SHA256 of 'admin'
+
+        let user_count: i64 = conn.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0)).unwrap_or(0);
         if user_count == 0 {
             let id = Uuid::new_v4().to_string();
             let now = Utc::now().to_rfc3339();
-            let default_perms = serde_json::to_string(&UserPermissions::default()).unwrap_or_default();
-            let default_hash = "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"; // SHA256 of 'admin'
 
             conn.execute(
                 "INSERT INTO users (id, org_id, username, email, password_hash, role, permissions, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![id, org_id, "admin", "admin@rustping.local", default_hash, "Admin", default_perms, now],
             )?;
+        } else {
+            // Upgrade existing admin user record if password_hash or username is NULL
+            let _ = conn.execute(
+                "UPDATE users SET username='admin', password_hash=?1, permissions=?2 WHERE username IS NULL OR username='' OR email='admin@rustping.local'",
+                params![default_hash, default_perms],
+            );
         }
 
         // Seed Default Public Status Page if empty
