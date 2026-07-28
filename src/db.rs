@@ -174,10 +174,18 @@ impl Database {
                 params![id, org_id, "admin", "admin@rustping.local", default_hash, "Admin", default_perms, now],
             )?;
         } else {
-            // Upgrade existing admin user record if password_hash or username is NULL
+            // Upgrade existing admin user record ONLY if username, password_hash or permissions are missing
             let _ = conn.execute(
-                "UPDATE users SET username='admin', password_hash=?1, permissions=?2 WHERE username IS NULL OR username='' OR email='admin@rustping.local'",
-                params![default_hash, default_perms],
+                "UPDATE users SET username='admin' WHERE username IS NULL OR username=''",
+                [],
+            );
+            let _ = conn.execute(
+                "UPDATE users SET password_hash=?1 WHERE (password_hash IS NULL OR password_hash='') AND (username='admin' OR email='admin@rustping.local')",
+                params![default_hash],
+            );
+            let _ = conn.execute(
+                "UPDATE users SET permissions=?1 WHERE permissions IS NULL OR permissions=''",
+                params![default_perms],
             );
         }
 
@@ -390,13 +398,28 @@ impl Database {
     }
 
     pub fn authenticate_user(&self, username: &str, password_hash: &str) -> Result<Option<User>> {
-        let users = self.get_users()?;
-        for user in users {
-            if user.username == username && user.password_hash == password_hash {
-                return Ok(Some(user));
-            }
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT id, org_id, username, email, password_hash, role, permissions, created_at FROM users WHERE username=?1 AND password_hash=?2")?;
+        let mut rows = stmt.query(params![username, password_hash])?;
+
+        if let Some(row) = rows.next()? {
+            let role_str: String = row.get(5)?;
+            let perms_str: String = row.get(6)?;
+            let permissions: UserPermissions = serde_json::from_str(&perms_str).unwrap_or_default();
+
+            Ok(Some(User {
+                id: row.get(0)?,
+                org_id: row.get(1)?,
+                username: row.get(2)?,
+                email: row.get(3)?,
+                password_hash: row.get(4)?,
+                role: UserRole::from_str(&role_str),
+                permissions,
+                created_at: row.get(7)?,
+            }))
+        } else {
+            Ok(None)
         }
-        Ok(None)
     }
 
     // Site Settings Persistence

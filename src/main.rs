@@ -6,7 +6,7 @@ mod sensors;
 mod email;
 mod db;
 
-use rocket::{get, post, delete, put, routes, State, response::Redirect, catch, catchers};
+use rocket::{get, post, delete, put, routes, State, catch, catchers};
 use rocket::serde::json::Json;
 use rocket::fs::{NamedFile, FileServer, relative};
 use models::{Device as ModelDevice, SensorType, User, UserRole, UserPermissions, SiteSettings, StatusPage, MaintenanceWindow, AuditLog};
@@ -305,8 +305,8 @@ impl<'r> FromRequest<'r> for Auth {
 }
 
 #[catch(401)]
-fn unauthorized() -> Redirect {
-    Redirect::to("/#/login")
+fn unauthorized() -> Status {
+    Status::Unauthorized
 }
 
 #[derive(Serialize, Deserialize, Clone)]

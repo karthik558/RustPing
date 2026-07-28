@@ -97,6 +97,7 @@ pub struct User {
     pub username: String,
     pub email: String,
     #[serde(skip_serializing)]
+    #[allow(dead_code)]
     pub password_hash: String,
     pub role: UserRole,
     pub permissions: UserPermissions,

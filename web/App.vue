@@ -374,29 +374,29 @@ async function login() {
       go('dashboard')
       resetInactivityTimer()
       return
+    } else {
+      loginForm.error = 'Invalid username or password.'
+      return
     }
-  } catch { /* fallback */ }
-
-  const storedUsers = JSON.parse(localStorage.getItem('users') || '[]')
-  const match = storedUsers.find(user => user.username === loginForm.username && (user.passwordHash === hash || user.password_hash === hash))
-  const isDefaultAdmin = loginForm.username === 'admin' && hash === '8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918'
-  if (!match && !isDefaultAdmin) {
-    loginForm.error = 'Those credentials do not match an active account in database.'
-    return
+  } catch {
+    const storedUsers = JSON.parse(localStorage.getItem('users') || '[]')
+    const match = storedUsers.find(user => user.username === loginForm.username && (user.passwordHash === hash || user.password_hash === hash))
+    if (match) {
+      currentUser.value = { 
+        username: match.username, 
+        role: match.role || 'Admin', 
+        lastLogin: new Date().toISOString(),
+        permissions: match.permissions || { manage_devices: true, view_logs: true, manage_settings: true, manage_users: true }
+      }
+      sessionStorage.setItem('currentUser', JSON.stringify(currentUser.value))
+      document.cookie = 'auth=true; path=/; SameSite=Lax'
+      await loadDevices()
+      go('dashboard')
+      resetInactivityTimer()
+      return
+    }
+    loginForm.error = 'Invalid username or password.'
   }
-  const user = match || { username: 'admin', role: 'Admin' }
-  const defaultPermissions = { manage_devices: true, view_logs: true, manage_settings: true, manage_users: true }
-  currentUser.value = { 
-    username: user.username, 
-    role: user.role || 'Admin', 
-    lastLogin: new Date().toISOString(),
-    permissions: user.permissions || defaultPermissions
-  }
-  sessionStorage.setItem('currentUser', JSON.stringify(currentUser.value))
-  document.cookie = 'auth=true; path=/; SameSite=Lax'
-  await loadDevices()
-  go('dashboard')
-  resetInactivityTimer()
 }
 
 function logout() {
@@ -583,6 +583,8 @@ async function changeUserPassword() {
       })
     })
     if (res.ok) {
+      localStorage.removeItem('users')
+      await loadUsers()
       flash('Password updated successfully in SQLite database!')
       changePasswordForm.old_password = ''
       changePasswordForm.new_password = ''
