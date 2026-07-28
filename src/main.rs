@@ -9,7 +9,7 @@ mod db;
 use rocket::{get, post, delete, put, routes, State, response::Redirect, catch, catchers};
 use rocket::serde::json::Json;
 use rocket::fs::{NamedFile, FileServer, relative};
-use models::{Device as ModelDevice, SensorType, User, UserRole, StatusPage, MaintenanceWindow, AuditLog};
+use models::{Device as ModelDevice, SensorType, User, UserRole, UserPermissions, SiteSettings, StatusPage, MaintenanceWindow, AuditLog};
 use log::{info, error};
 use sensors::{monitor_ping, monitor_http, monitor_tcp_port, monitor_ssl_cert, monitor_dns_resolution, monitor_database_port};
 use db::Database;
@@ -24,7 +24,7 @@ use tokio::sync::Mutex;
 use std::collections::HashMap;
 use chrono::{NaiveDate, Local, DateTime};
 use rocket::response::content::RawText;
-use rocket::http::Status;
+use rocket::http::{Status, CookieJar, Cookie};
 use rocket::request::{self, Request, FromRequest};
 use rocket::outcome::Outcome;
 use serde::Deserialize;
@@ -427,7 +427,47 @@ async fn update_device(id: usize, device: &str, db: &State<Database>, devices: &
     Status::Ok
 }
 
-// User RBAC Management Endpoints (Feature 1)
+// Authentication & User RBAC Management Endpoints
+#[derive(Deserialize)]
+struct LoginReq {
+    username: String,
+    password_hash: String,
+}
+
+#[post("/api/login", data = "<login_req>")]
+async fn login_user(jar: &CookieJar<'_>, login_req: Json<LoginReq>, db: &State<Database>) -> Result<Json<User>, Status> {
+    match db.authenticate_user(&login_req.username, &login_req.password_hash) {
+        Ok(Some(user)) => {
+            jar.add(Cookie::new("auth", "true"));
+            let _ = db.log_audit(&user.email, "LOGIN_SUCCESS", &format!("User {} logged in", user.username));
+            Ok(Json(user))
+        }
+        _ => Err(Status::Unauthorized),
+    }
+}
+
+#[derive(Deserialize)]
+struct ChangePasswordReq {
+    username: String,
+    old_password_hash: String,
+    new_password_hash: String,
+}
+
+#[post("/api/user/change-password", data = "<req>")]
+async fn change_password(_auth: Auth, req: Json<ChangePasswordReq>, db: &State<Database>) -> Status {
+    match db.authenticate_user(&req.username, &req.old_password_hash) {
+        Ok(Some(_user)) => {
+            if let Ok(true) = db.update_user_password(&req.username, &req.new_password_hash) {
+                let _ = db.log_audit(&req.username, "CHANGE_PASSWORD", &format!("Password updated for user {}", req.username));
+                Status::Ok
+            } else {
+                Status::InternalServerError
+            }
+        }
+        _ => Status::Unauthorized,
+    }
+}
+
 #[get("/api/users")]
 async fn get_users(_auth: Auth, db: &State<Database>) -> Json<Vec<User>> {
     match db.get_users() {
@@ -438,22 +478,55 @@ async fn get_users(_auth: Auth, db: &State<Database>) -> Json<Vec<User>> {
 
 #[derive(Deserialize)]
 struct CreateUserReq {
+    username: String,
     email: String,
+    password_hash: String,
     role: String,
+    permissions: UserPermissions,
 }
 
 #[post("/api/users", data = "<user_req>")]
 async fn create_user(_auth: Auth, user_req: Json<CreateUserReq>, db: &State<Database>) -> Result<Json<User>, Status> {
     let role = UserRole::from_str(&user_req.role);
-    match db.add_user(&user_req.email, role) {
+    match db.add_user(&user_req.username, &user_req.email, &user_req.password_hash, role, &user_req.permissions) {
         Ok(user) => {
-            let _ = db.log_audit("admin@rustping.local", "CREATE_USER", &format!("Created user {} with role {}", user.email, user.role.as_str()));
+            let _ = db.log_audit("admin@rustping.local", "CREATE_USER", &format!("Created operator {} with role {}", user.username, user.role.as_str()));
             Ok(Json(user))
         }
         Err(e) => {
             error!("Failed to create user: {}", e);
             Err(Status::InternalServerError)
         }
+    }
+}
+
+#[delete("/api/users/<username>")]
+async fn delete_user(_auth: Auth, username: &str, db: &State<Database>) -> Status {
+    match db.delete_user(username) {
+        Ok(_) => {
+            let _ = db.log_audit("admin@rustping.local", "DELETE_USER", &format!("Deleted user {}", username));
+            Status::Ok
+        }
+        Err(_) => Status::InternalServerError,
+    }
+}
+
+#[get("/api/settings")]
+async fn get_settings(db: &State<Database>) -> Json<SiteSettings> {
+    match db.get_site_settings() {
+        Ok(s) => Json(s),
+        Err(_) => Json(SiteSettings::default()),
+    }
+}
+
+#[post("/api/settings", data = "<settings>")]
+async fn save_settings(_auth: Auth, settings: Json<SiteSettings>, db: &State<Database>) -> Status {
+    match db.save_site_settings(&settings) {
+        Ok(_) => {
+            let _ = db.log_audit("admin@rustping.local", "UPDATE_SETTINGS", "Site configuration updated");
+            Status::Ok
+        }
+        Err(_) => Status::InternalServerError,
     }
 }
 
@@ -593,6 +666,11 @@ async fn main() {
             send_test_email,
             get_users,
             create_user,
+            delete_user,
+            login_user,
+            change_password,
+            get_settings,
+            save_settings,
             get_audit_logs,
             get_status_pages,
             create_status_page,

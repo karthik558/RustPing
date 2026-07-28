@@ -72,12 +72,58 @@ impl UserRole {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct UserPermissions {
+    pub manage_devices: bool,
+    pub view_logs: bool,
+    pub manage_settings: bool,
+    pub manage_users: bool,
+}
+
+impl Default for UserPermissions {
+    fn default() -> Self {
+        Self {
+            manage_devices: true,
+            view_logs: true,
+            manage_settings: true,
+            manage_users: true,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct User {
     pub id: String,
     pub org_id: String,
+    pub username: String,
     pub email: String,
+    #[serde(skip_serializing)]
+    pub password_hash: String,
     pub role: UserRole,
+    pub permissions: UserPermissions,
     pub created_at: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SiteSettings {
+    pub graph_style: String,
+    pub density: String,
+    pub refresh_rate: u32,
+    pub time_format: String,
+    pub site_name: String,
+    pub alert_emails_enabled: bool,
+}
+
+impl Default for SiteSettings {
+    fn default() -> Self {
+        Self {
+            graph_style: "Bar".to_string(),
+            density: "Comfortable".to_string(),
+            refresh_rate: 5000,
+            time_format: "24h".to_string(),
+            site_name: "RustPing Console".to_string(),
+            alert_emails_enabled: true,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

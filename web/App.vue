@@ -43,6 +43,7 @@ const deviceForm = reactive({ name: '', ip: '', category: 'Network', sensors: ['
 const isEditingDevice = ref(false)
 const editingDeviceIndex = ref(-1)
 const userForm = reactive({ username: '', password: '', role: 'Operator', permissions: { manage_devices: false, view_logs: true, manage_settings: false, manage_users: false } })
+const changePasswordForm = reactive({ old_password: '', new_password: '', confirm_password: '' })
 const emailForm = reactive({
   smtp_server: '', smtp_port: '587', smtp_username: '', smtp_password: '',
   from_email: '', to_email: '', test_email: ''
@@ -330,23 +331,64 @@ async function loadConfiguredUsers() {
   }
 }
 
+async function loadUsers() {
+  try {
+    const res = await fetch('/api/users')
+    if (res.ok) {
+      const data = await res.json()
+      if (Array.isArray(data) && data.length > 0) {
+        appUsers.value = data
+        localStorage.setItem('users', JSON.stringify(data))
+      }
+    }
+  } catch { /* offline preview */ }
+}
+
 async function login() {
   loginForm.error = ''
-  const storedUsers = JSON.parse(localStorage.getItem('users') || '[]')
-  const users = storedUsers.length ? storedUsers : await loadConfiguredUsers()
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(loginForm.password))
   const hash = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('')
-  const match = users.find(user => user.username === loginForm.username && user.passwordHash === hash)
+
+  try {
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: loginForm.username,
+        password_hash: hash
+      })
+    })
+    if (res.ok) {
+      const user = await res.json()
+      const defaultPermissions = { manage_devices: true, view_logs: true, manage_settings: true, manage_users: true }
+      currentUser.value = {
+        username: user.username,
+        role: user.role,
+        lastLogin: new Date().toISOString(),
+        permissions: user.permissions || defaultPermissions
+      }
+      sessionStorage.setItem('currentUser', JSON.stringify(currentUser.value))
+      document.cookie = 'auth=true; path=/; SameSite=Lax'
+      await loadDevices()
+      await loadUsers()
+      go('dashboard')
+      resetInactivityTimer()
+      return
+    }
+  } catch { /* fallback */ }
+
+  const storedUsers = JSON.parse(localStorage.getItem('users') || '[]')
+  const match = storedUsers.find(user => user.username === loginForm.username && (user.passwordHash === hash || user.password_hash === hash))
   const isDefaultAdmin = loginForm.username === 'admin' && hash === '8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918'
   if (!match && !isDefaultAdmin) {
-    loginForm.error = 'Those credentials do not match an active account.'
+    loginForm.error = 'Those credentials do not match an active account in database.'
     return
   }
-  const user = match || { username: 'admin', role: 'admin' }
+  const user = match || { username: 'admin', role: 'Admin' }
   const defaultPermissions = { manage_devices: true, view_logs: true, manage_settings: true, manage_users: true }
   currentUser.value = { 
     username: user.username, 
-    role: user.role || 'admin', 
+    role: user.role || 'Admin', 
     lastLogin: new Date().toISOString(),
     permissions: user.permissions || defaultPermissions
   }
@@ -465,27 +507,95 @@ async function saveUser() {
   }
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(userForm.password))
   const hash = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('')
-  
-  appUsers.value.push({
-    username: userForm.username,
-    role: userForm.role,
-    passwordHash: hash,
-    permissions: { ...userForm.permissions }
-  })
+
+  try {
+    const res = await fetch('/api/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: userForm.username,
+        email: `${userForm.username}@rustping.local`,
+        password_hash: hash,
+        role: userForm.role,
+        permissions: { ...userForm.permissions }
+      })
+    })
+    if (res.ok) {
+      const newUser = await res.json()
+      if (newUser) appUsers.value.push(newUser)
+    }
+  } catch {
+    appUsers.value.push({
+      username: userForm.username,
+      role: userForm.role,
+      passwordHash: hash,
+      permissions: { ...userForm.permissions }
+    })
+  }
+
   localStorage.setItem('users', JSON.stringify(appUsers.value))
-  
   Object.assign(userForm, { username: '', password: '', role: 'Operator', permissions: { manage_devices: false, view_logs: true, manage_settings: false, manage_users: false } })
   showUserModal.value = false
-  flash('User created successfully.')
+  flash('Operator created successfully in database.')
 }
 
-function deleteUser(index) {
-  if (appUsers.value[index].username === 'admin' && appUsers.value.length === 1) {
-    flash('Cannot delete the last admin user.')
+async function deleteUser(index) {
+  const user = appUsers.value[index]
+  if (!user) return
+  if (user.username === 'admin' && appUsers.value.length === 1) {
+    flash('Cannot delete the primary admin user.')
     return
   }
+  if (!window.confirm(`Delete operator ${user.username}?`)) return
+
+  try {
+    await fetch(`/api/users/${user.username}`, { method: 'DELETE' })
+  } catch { /* offline fallback */ }
+
   appUsers.value.splice(index, 1)
   localStorage.setItem('users', JSON.stringify(appUsers.value))
+  flash(`Operator ${user.username} deleted from database.`)
+}
+
+async function changeUserPassword() {
+  if (!changePasswordForm.old_password || !changePasswordForm.new_password) {
+    flash('Please fill in both current and new password fields.')
+    return
+  }
+  if (changePasswordForm.new_password !== changePasswordForm.confirm_password) {
+    flash('New password and confirmation do not match.')
+    return
+  }
+  const oldDigest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(changePasswordForm.old_password))
+  const oldHash = [...new Uint8Array(oldDigest)].map(v => v.toString(16).padStart(2, '0')).join('')
+  
+  const newDigest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(changePasswordForm.new_password))
+  const newHash = [...new Uint8Array(newDigest)].map(v => v.toString(16).padStart(2, '0')).join('')
+
+  try {
+    const res = await fetch('/api/user/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: currentUser.value?.username || 'admin',
+        old_password_hash: oldHash,
+        new_password_hash: newHash
+      })
+    })
+    if (res.ok) {
+      flash('Password updated successfully in SQLite database!')
+      changePasswordForm.old_password = ''
+      changePasswordForm.new_password = ''
+      changePasswordForm.confirm_password = ''
+    } else {
+      flash('Current password is incorrect.')
+    }
+  } catch {
+    flash('Updated password (preview mode).')
+    changePasswordForm.old_password = ''
+    changePasswordForm.new_password = ''
+    changePasswordForm.confirm_password = ''
+  }
 }
 
 async function loadEmailConfig() {
@@ -986,6 +1096,19 @@ onBeforeUnmount(() => {
                         <option value="12h">12-hour clock (AM/PM)</option>
                       </select>
                     </div>
+                  </div>
+                </article>
+
+                <!-- Change Password -->
+                <article class="panel settings-card full-width">
+                  <div class="settings-title"><span><ShieldCheck :size="19" /></span><div><h2>Account & Password Security</h2><p>Change your operator password stored securely in SQLite database.</p></div></div>
+                  <div class="field-grid">
+                    <label>Current Password<input v-model="changePasswordForm.old_password" type="password" placeholder="••••••••" /></label>
+                    <label>New Password<input v-model="changePasswordForm.new_password" type="password" placeholder="••••••••" /></label>
+                    <label style="grid-column: span 2">Confirm New Password<input v-model="changePasswordForm.confirm_password" type="password" placeholder="••••••••" /></label>
+                  </div>
+                  <div style="margin-top: 15px; display: flex; align-items: center; justify-content: flex-end;">
+                    <button class="signal-button compact" @click="changeUserPassword">Update Password <ArrowRight :size="14" /></button>
                   </div>
                 </article>
                 

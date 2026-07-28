@@ -2,7 +2,7 @@
 use rusqlite::{params, Connection, Result};
 use std::sync::{Arc, Mutex};
 use log::info;
-use crate::models::{Device, SensorType, User, UserRole, StatusPage, MaintenanceWindow, AuditLog};
+use crate::models::{Device, SensorType, User, UserRole, UserPermissions, SiteSettings, StatusPage, MaintenanceWindow, AuditLog};
 use uuid::Uuid;
 use chrono::Utc;
 use std::fs;
@@ -45,10 +45,18 @@ impl Database {
             CREATE TABLE IF NOT EXISTS users (
                 id TEXT PRIMARY KEY,
                 org_id TEXT NOT NULL,
-                email TEXT NOT NULL UNIQUE,
+                username TEXT NOT NULL UNIQUE,
+                email TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
                 role TEXT NOT NULL,
+                permissions TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (org_id) REFERENCES organizations(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS site_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS devices (
@@ -148,14 +156,17 @@ impl Database {
             conn.query_row("SELECT id FROM workspaces LIMIT 1", [], |r| r.get(0))?
         };
 
-        // Seed Admin user if empty
+        // Seed Admin user if empty (default username: admin, default pass_hash for 'admin')
         let user_count: i64 = conn.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))?;
         if user_count == 0 {
             let id = Uuid::new_v4().to_string();
             let now = Utc::now().to_rfc3339();
+            let default_perms = serde_json::to_string(&UserPermissions::default()).unwrap_or_default();
+            let default_hash = "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"; // SHA256 of 'admin'
+
             conn.execute(
-                "INSERT INTO users (id, org_id, email, role, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![id, org_id, "admin@rustping.local", "Owner", now],
+                "INSERT INTO users (id, org_id, username, email, password_hash, role, permissions, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![id, org_id, "admin", "admin@rustping.local", default_hash, "Admin", default_perms, now],
             )?;
         }
 
@@ -168,6 +179,18 @@ impl Database {
                 "INSERT INTO status_pages (id, workspace_id, slug, title, description, is_public, custom_domain, created_at) VALUES (?1, ?2, ?3, ?4, ?5, 1, NULL, ?6)",
                 params![id, ws_id, "global-status", "RustPing Global System Status", "Live real-time operational status across all core services", now],
             )?;
+        }
+
+        // Seed Default Site Settings if empty
+        let settings_count: i64 = conn.query_row("SELECT COUNT(*) FROM site_settings", [], |r| r.get(0))?;
+        if settings_count == 0 {
+            let defaults = SiteSettings::default();
+            let _ = conn.execute("INSERT INTO site_settings (key, value) VALUES (?1, ?2)", params!["graph_style", defaults.graph_style]);
+            let _ = conn.execute("INSERT INTO site_settings (key, value) VALUES (?1, ?2)", params!["density", defaults.density]);
+            let _ = conn.execute("INSERT INTO site_settings (key, value) VALUES (?1, ?2)", params!["refresh_rate", defaults.refresh_rate.to_string()]);
+            let _ = conn.execute("INSERT INTO site_settings (key, value) VALUES (?1, ?2)", params!["time_format", defaults.time_format]);
+            let _ = conn.execute("INSERT INTO site_settings (key, value) VALUES (?1, ?2)", params!["site_name", defaults.site_name]);
+            let _ = conn.execute("INSERT INTO site_settings (key, value) VALUES (?1, ?2)", params!["alert_emails_enabled", "true"]);
         }
 
         // Migrate devices from devices.json if database devices table is empty
@@ -288,17 +311,24 @@ impl Database {
         Ok(())
     }
 
+    // User Administration & Password Change Methods
     pub fn get_users(&self) -> Result<Vec<User>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT id, org_id, email, role, created_at FROM users")?;
+        let mut stmt = conn.prepare("SELECT id, org_id, username, email, password_hash, role, permissions, created_at FROM users")?;
         let rows = stmt.query_map([], |row| {
-            let role_str: String = row.get(3)?;
+            let role_str: String = row.get(5)?;
+            let perms_str: String = row.get(6)?;
+            let permissions: UserPermissions = serde_json::from_str(&perms_str).unwrap_or_default();
+
             Ok(User {
                 id: row.get(0)?,
                 org_id: row.get(1)?,
-                email: row.get(2)?,
+                username: row.get(2)?,
+                email: row.get(3)?,
+                password_hash: row.get(4)?,
                 role: UserRole::from_str(&role_str),
-                created_at: row.get(4)?,
+                permissions,
+                created_at: row.get(7)?,
             })
         })?;
 
@@ -309,24 +339,89 @@ impl Database {
         Ok(users)
     }
 
-    pub fn add_user(&self, email: &str, role: UserRole) -> Result<User> {
+    pub fn add_user(&self, username: &str, email: &str, password_hash: &str, role: UserRole, permissions: &UserPermissions) -> Result<User> {
         let conn = self.conn.lock().unwrap();
         let org_id: String = conn.query_row("SELECT id FROM organizations LIMIT 1", [], |r| r.get(0))?;
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
+        let perms_json = serde_json::to_string(permissions).unwrap_or_default();
 
         conn.execute(
-            "INSERT INTO users (id, org_id, email, role, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![id, org_id, email, role.as_str(), now],
+            "INSERT INTO users (id, org_id, username, email, password_hash, role, permissions, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![id, org_id, username, email, password_hash, role.as_str(), perms_json, now],
         )?;
 
         Ok(User {
             id,
             org_id,
+            username: username.to_string(),
             email: email.to_string(),
+            password_hash: password_hash.to_string(),
             role,
+            permissions: permissions.clone(),
             created_at: now,
         })
+    }
+
+    pub fn delete_user(&self, username: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM users WHERE username=?1", params![username])?;
+        Ok(())
+    }
+
+    pub fn update_user_password(&self, username: &str, new_password_hash: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let updated = conn.execute(
+            "UPDATE users SET password_hash=?1 WHERE username=?2",
+            params![new_password_hash, username],
+        )?;
+        Ok(updated > 0)
+    }
+
+    pub fn authenticate_user(&self, username: &str, password_hash: &str) -> Result<Option<User>> {
+        let users = self.get_users()?;
+        for user in users {
+            if user.username == username && user.password_hash == password_hash {
+                return Ok(Some(user));
+            }
+        }
+        Ok(None)
+    }
+
+    // Site Settings Persistence
+    pub fn get_site_settings(&self) -> Result<SiteSettings> {
+        let conn = self.conn.lock().unwrap();
+        let mut settings = SiteSettings::default();
+
+        if let Ok(graph_style) = conn.query_row("SELECT value FROM site_settings WHERE key='graph_style'", [], |r| r.get::<_, String>(0)) {
+            settings.graph_style = graph_style;
+        }
+        if let Ok(density) = conn.query_row("SELECT value FROM site_settings WHERE key='density'", [], |r| r.get::<_, String>(0)) {
+            settings.density = density;
+        }
+        if let Ok(refresh_rate) = conn.query_row("SELECT value FROM site_settings WHERE key='refresh_rate'", [], |r| r.get::<_, String>(0)) {
+            if let Ok(rate) = refresh_rate.parse::<u32>() {
+                settings.refresh_rate = rate;
+            }
+        }
+        if let Ok(time_format) = conn.query_row("SELECT value FROM site_settings WHERE key='time_format'", [], |r| r.get::<_, String>(0)) {
+            settings.time_format = time_format;
+        }
+        if let Ok(site_name) = conn.query_row("SELECT value FROM site_settings WHERE key='site_name'", [], |r| r.get::<_, String>(0)) {
+            settings.site_name = site_name;
+        }
+
+        Ok(settings)
+    }
+
+    pub fn save_site_settings(&self, settings: &SiteSettings) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute("INSERT INTO site_settings (key, value) VALUES ('graph_style', ?1) ON CONFLICT(key) DO UPDATE SET value=?1", params![settings.graph_style]);
+        let _ = conn.execute("INSERT INTO site_settings (key, value) VALUES ('density', ?1) ON CONFLICT(key) DO UPDATE SET value=?1", params![settings.density]);
+        let _ = conn.execute("INSERT INTO site_settings (key, value) VALUES ('refresh_rate', ?1) ON CONFLICT(key) DO UPDATE SET value=?1", params![settings.refresh_rate.to_string()]);
+        let _ = conn.execute("INSERT INTO site_settings (key, value) VALUES ('time_format', ?1) ON CONFLICT(key) DO UPDATE SET value=?1", params![settings.time_format]);
+        let _ = conn.execute("INSERT INTO site_settings (key, value) VALUES ('site_name', ?1) ON CONFLICT(key) DO UPDATE SET value=?1", params![settings.site_name]);
+        Ok(())
     }
 
     pub fn get_status_pages(&self) -> Result<Vec<StatusPage>> {
