@@ -25,6 +25,62 @@ const logSearch = ref('')
 const logStatusFilter = ref('all')
 const faqOpen = ref(0)
 const mobileMenu = ref(false)
+
+// Command Palette State
+const showCmdPalette = ref(false)
+const cmdQuery = ref('')
+const cmdSelectedIndex = ref(0)
+const bulkSelectedDevices = ref([])
+
+function toggleCmdPalette() {
+  showCmdPalette.value = !showCmdPalette.value
+  cmdQuery.value = ''
+  cmdSelectedIndex.value = 0
+}
+
+function handleGlobalKeydown(e) {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault()
+    toggleCmdPalette()
+  } else if (e.key === 'Escape' && showCmdPalette.value) {
+    showCmdPalette.value = false
+  }
+}
+
+const commandPaletteItems = computed(() => {
+  const items = [
+    { type: 'nav', label: 'Go to Dashboard', icon: LayoutDashboard, action: () => go('dashboard') },
+    { type: 'nav', label: 'Go to Device Inventory', icon: Server, action: () => go('devices') },
+    { type: 'nav', label: 'Go to Network Map', icon: Network, action: () => go('map') },
+    { type: 'nav', label: 'Go to SLA Reports', icon: BarChart2, action: () => go('reports') },
+    { type: 'nav', label: 'Go to System Telemetry', icon: Cpu, action: () => go('system_health') },
+    { type: 'nav', label: 'Go to Auto Discovery', icon: Search, action: () => go('discovery') },
+    { type: 'action', label: 'Toggle Light/Dark Theme', icon: Sun, action: () => toggleTheme() },
+    { type: 'action', label: 'Add New Device', icon: Plus, action: () => { openAddDeviceModal(); go('devices'); } }
+  ]
+  
+  if (cmdQuery.value) {
+    const q = cmdQuery.value.toLowerCase()
+    devices.value.forEach(d => {
+      if (d.name.toLowerCase().includes(q) || d.ip.toLowerCase().includes(q)) {
+        items.unshift({
+          type: 'device',
+          label: 'Device: ' + d.name + ' (' + d.ip + ')',
+          icon: Server,
+          action: () => { search.value = d.name; go('devices'); }
+        })
+      }
+    })
+    return items.filter(i => i.label.toLowerCase().includes(q))
+  }
+  return items
+})
+
+function executeCmdItem(item) {
+  item.action()
+  showCmdPalette.value = false
+}
+
 const showDeviceModal = ref(false)
 const showUserModal = ref(false)
 const appUsers = ref(JSON.parse(localStorage.getItem('users') || 'null') || [])
@@ -889,6 +945,8 @@ function handleActivity() {
 }
 
 onMounted(() => {
+  window.addEventListener('keydown', handleGlobalKeydown)
+
   window.addEventListener('hashchange', handleHash)
   handleHash()
   if (isAuthenticated.value) {
@@ -1615,5 +1673,28 @@ onBeforeUnmount(() => {
       </div>
       <div v-if="showUserModal" class="modal-backdrop" @click.self="showUserModal = false"><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="user-modal-title"><div class="modal-head"><div><small>AUTHENTICATION</small><h2 id="user-modal-title">Create operator</h2></div><button aria-label="Close" @click="showUserModal = false"><X :size="19" /></button></div><div class="field-grid"><label>Username<input v-model="userForm.username" placeholder="Operator ID" autocomplete="new-password" /></label><label>Password<input type="password" v-model="userForm.password" placeholder="••••••••" autocomplete="new-password" /></label></div><div class="field-grid" style="margin-top:20px"><label>Role Template<select v-model="userForm.role" @change="applyUserTemplate"><option value="Admin">Admin (Full Access)</option><option value="Operator">Operator (Standard)</option><option value="Read-Only">Read-Only</option></select></label></div><div class="sensor-pick"><small>ADVANCED PERMISSIONS</small><div style="flex-direction:column;align-items:flex-start;margin-top:15px"><label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:12px;text-transform:none"><input type="checkbox" v-model="userForm.permissions.manage_devices" style="width:16px;height:16px;margin:0"> Manage network devices</label><label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:12px;text-transform:none"><input type="checkbox" v-model="userForm.permissions.view_logs" style="width:16px;height:16px;margin:0"> View and export live event stream</label><label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:12px;text-transform:none"><input type="checkbox" v-model="userForm.permissions.manage_settings" style="width:16px;height:16px;margin:0"> Modify interface and alert settings</label><label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:12px;text-transform:none"><input type="checkbox" v-model="userForm.permissions.manage_users" style="width:16px;height:16px;margin:0"> Manage operators and access</label></div></div><button class="signal-button modal-action" @click="saveUser">Create operator <ArrowRight :size="15" /></button></section></div>
     </template>
-  </div>
+  
+      <!-- Global Command Palette Modal (Cmd + K) -->
+      <div v-if="showCmdPalette" class="cmd-palette-backdrop" @click.self="showCmdPalette = false">
+        <div class="cmd-palette">
+          <div class="cmd-input-wrap">
+            <Search :size="18" style="color: var(--lime);" />
+            <input v-model="cmdQuery" placeholder="Type a command or device name... (Esc to close)" autofocus />
+            <span style="font-size: 10px; font-family: 'DM Mono', monospace; color: var(--muted); border: 1px solid var(--line); padding: 2px 6px;">ESC</span>
+          </div>
+          <div class="cmd-results">
+            <div v-for="(item, idx) in commandPaletteItems" :key="idx" class="cmd-item" :class="{selected: idx === cmdSelectedIndex}" @click="executeCmdItem(item)">
+              <div class="cmd-item-left">
+                <component :is="item.icon" :size="16" />
+                <span>{{ item.label }}</span>
+              </div>
+              <ArrowRight :size="14" style="opacity: 0.6;" />
+            </div>
+            <div v-if="!commandPaletteItems.length" style="padding: 20px; text-align: center; color: var(--muted); font-size: 12px;">
+              No matching commands or devices found.
+            </div>
+          </div>
+        </div>
+      </div>
+</div>
 </template>
