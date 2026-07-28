@@ -21,6 +21,59 @@ const notice = ref('')
 const search = ref('')
 const statusFilter = ref('all')
 const selectedCategoryFilter = ref('all')
+
+// SLA & Reports Filter State
+const reportTimeframe = ref('30d')
+const selectedReportCategory = ref('all')
+const selectedReportDevice = ref('all')
+
+const reportFilteredDevices = computed(() => {
+  return devices.value.filter(d => {
+    const matchesCat = selectedReportCategory.value === 'all' || d.category === selectedReportCategory.value
+    const matchesDev = selectedReportDevice.value === 'all' || d.name === selectedReportDevice.value
+    return matchesCat && matchesDev
+  })
+})
+
+function generateCustomReport() {
+  flash(`Generating Custom Report (${reportTimeframe.value.toUpperCase()}) for ${reportFilteredDevices.value.length} devices...`)
+  printReport()
+}
+
+
+// Tag Filter State (Feature 5)
+const selectedTagFilter = ref('all')
+const availableTags = computed(() => {
+  const tagsSet = new Set(['prod', 'aws', 'k8s', 'db', 'gateway', 'storage'])
+  devices.value.forEach(d => {
+    if (Array.isArray(d.tags)) {
+      d.tags.forEach(t => tagsSet.add(t))
+    }
+  })
+  return Array.from(tagsSet)
+})
+
+// Subnet Grouping (Feature 3)
+const subnetGroups = computed(() => {
+  const groups = {}
+  devices.value.forEach(d => {
+    const parts = (d.ip || '').split('.')
+    const subnet = parts.length === 4 ? `${parts[0]}.${parts[1]}.${parts[2]}.x` : 'Other'
+    if (!groups[subnet]) groups[subnet] = []
+    groups[subnet].push(d)
+  })
+  return groups
+})
+
+// Dashboard Layout Customization (Feature 1)
+const dashboardWidgets = reactive([
+  { id: 'throughput', name: 'Throughput Load', enabled: true },
+  { id: 'health', name: 'Overall Health', enabled: true },
+  { id: 'latency', name: 'Global Latency', enabled: true },
+  { id: 'traffic', name: 'Network Traffic', enabled: true },
+  { id: 'category', name: 'Category Breakdown', enabled: true }
+])
+
 const logSearch = ref('')
 const logStatusFilter = ref('all')
 const faqOpen = ref(0)
@@ -96,7 +149,7 @@ if (!appUsers.value || appUsers.value.length === 0) {
 }
 
 const loginForm = reactive({ username: 'admin', password: '', error: '' })
-const deviceForm = reactive({ name: '', ip: '', category: 'Network', sensors: ['Ping'], http_path: '', port: null, snmp_community: 'public', parent_device: '', db_type: 'PostgreSQL', ws_url: '', disk_path: '/', custom_category_active: false })
+const deviceForm = reactive({ name: '', ip: '', category: 'Network', tags: [], tagInput: '', sensors: ['Ping'], http_path: '', port: null, snmp_community: 'public', parent_device: '', db_type: 'PostgreSQL', ws_url: '', disk_path: '/', custom_category_active: false })
 const isEditingDevice = ref(false)
 const editingDeviceIndex = ref(-1)
 
@@ -255,12 +308,12 @@ const chartAxisLabels = computed(() => {
 })
 
 const throughputData = ref([22,31,27,46,39,58,51,72,64,81,70,88,77,91,83,96,86,92,79,89,72,84,68,76])
-const polylinePoints = computed(() => throughputData.value.map((n, i) => `${(i / (throughputData.value.length - 1)) * 100},${100 - n}`).join(' '))
-const polygonPoints = computed(() => `0,100 ${polylinePoints.value} 100,100`)
+const polylinePoints = computed(() => throughputData.value.map((n, i) => `${(i / (throughputData.value.length - 1)) * 1000},${100 - n}`).join(' '))
+const polygonPoints = computed(() => `0,100 ${polylinePoints.value} 1000,100`)
 
 const latencyData = ref([12,15,14,18,22,25,20,19,15,14,12,18,35,42,30,22,18,15,14,16,14,15,13,12])
-const latencyPolyline = computed(() => latencyData.value.map((n, i) => `${(i / (latencyData.value.length - 1)) * 100},${100 - Math.min(95, n * 2)}`).join(' '))
-const latencyPolygon = computed(() => `0,100 ${latencyPolyline.value} 100,100`)
+const latencyPolyline = computed(() => latencyData.value.map((n, i) => `${(i / (latencyData.value.length - 1)) * 1000},${100 - Math.min(95, n * 2)}`).join(' '))
+const latencyPolygon = computed(() => `0,100 ${latencyPolyline.value} 1000,100`)
 
 const uptimeHistory = ref(Array.from({length: 90}, (_, i) => Math.random() > 0.05))
 
@@ -368,11 +421,44 @@ const filteredDevices = computed(() => {
       || (statusFilter.value === 'online' && (d.ping_status === 'Up' || d.ping_status === true))
       || (statusFilter.value === 'offline' && (d.ping_status === 'Down' || d.ping_status === false || d.ping_status === 'Unreachable'))
     const matchesCategory = selectedCategoryFilter.value === 'all' || d.category === selectedCategoryFilter.value
-    return matchesSearch && matchesStatus && matchesCategory
+    const matchesTag = selectedTagFilter.value === 'all' || (Array.isArray(d.tags) && d.tags.includes(selectedTagFilter.value))
+    return matchesSearch && matchesStatus && matchesCategory && matchesTag
   })
 })
 
-const filteredLogs = computed(() => {
+
+const logSelectedDevice = ref('all')
+
+const advancedFilteredLogs = computed(() => {
+  let result = logs.value;
+  if (logStatusFilter.value === 'success') {
+    result = result.filter(l => !l.down);
+  } else if (logStatusFilter.value === 'fail') {
+    result = result.filter(l => l.down);
+  }
+
+  if (logSelectedDevice.value !== 'all') {
+    const sel = logSelectedDevice.value.toLowerCase();
+    result = result.filter(l => {
+      const dev = (l.device || '').toLowerCase();
+      return dev === sel || dev.startsWith(sel + ' (') || dev.includes(sel);
+    });
+  }
+  
+  if (logSearch.value) {
+    const term = logSearch.value.toLowerCase();
+    result = result.filter(l => 
+      (l.device && l.device.toLowerCase().includes(term)) || 
+      (l.timestamp && l.timestamp.toLowerCase().includes(term)) ||
+      (l.ping && l.ping.toLowerCase().includes(term)) ||
+      (l.http && l.http.toLowerCase().includes(term))
+    );
+  }
+  return result.slice().reverse();
+})
+
+const filteredLogs = computed(() => advancedFilteredLogs.value)
+const _oldFilteredLogs = computed(() => {
   let result = logs.value;
   if (logStatusFilter.value === 'success') {
     result = result.filter(l => !l.down);
@@ -1175,17 +1261,17 @@ onBeforeUnmount(() => {
                       <i v-for="(n,index) in throughputData" :key="index" :style="{height:`${n}%`}"></i>
                     </template>
                     <template v-else-if="userSettings.graphStyle === 'Line'">
-                      <svg viewBox="0 0 100 100" preserveAspectRatio="none" class="svg-graph">
-                        <polyline :points="polylinePoints" fill="none" stroke="var(--lime)" stroke-width="1.5" />
-                        <circle v-for="(n, index) in throughputData" :key="index" :cx="(index / (throughputData.length - 1)) * 100" :cy="100 - n" r="3" fill="var(--lime)" style="cursor:pointer">
+                      <svg viewBox="0 0 1000 100" preserveAspectRatio="none" class="svg-graph">
+                        <polyline :points="polylinePoints" fill="none" stroke="var(--lime)" stroke-width="2" vector-effect="non-scaling-stroke" />
+                        <circle v-for="(n, index) in throughputData" :key="index" :cx="(index / (throughputData.length - 1)) * 1000" :cy="100 - n" r="3" fill="var(--lime)" style="cursor:pointer">
                         </circle>
                       </svg>
                     </template>
                     <template v-else-if="userSettings.graphStyle === 'Area'">
-                      <svg viewBox="0 0 100 100" preserveAspectRatio="none" class="svg-graph">
-                        <polygon :points="polygonPoints" fill="var(--lime-muted)" />
-                        <polyline :points="polylinePoints" fill="none" stroke="var(--lime)" stroke-width="1.5" />
-                        <circle v-for="(n, index) in throughputData" :key="index" :cx="(index / (throughputData.length - 1)) * 100" :cy="100 - n" r="3" fill="var(--lime)" style="cursor:pointer">
+                      <svg viewBox="0 0 1000 100" preserveAspectRatio="none" class="svg-graph">
+                        <polygon :points="polygonPoints" fill="rgba(207, 255, 51, 0.18)" />
+                        <polyline :points="polylinePoints" fill="none" stroke="var(--lime)" stroke-width="2" vector-effect="non-scaling-stroke" />
+                        <circle v-for="(n, index) in throughputData" :key="index" :cx="(index / (throughputData.length - 1)) * 1000" :cy="100 - n" r="3" fill="var(--lime)" style="cursor:pointer">
                         </circle>
                       </svg>
                     </template>
@@ -1200,17 +1286,17 @@ onBeforeUnmount(() => {
                       <i v-for="(n,index) in latencyData" :key="index" :style="{height:`${n * 2}%`}"></i>
                     </template>
                     <template v-else-if="userSettings.graphStyle === 'Line'">
-                      <svg viewBox="0 0 100 100" preserveAspectRatio="none" class="svg-graph">
-                        <polyline :points="latencyPolyline" fill="none" stroke="var(--lime)" stroke-width="1.5" />
-                        <circle v-for="(n, index) in latencyData" :key="index" :cx="(index / (latencyData.length - 1)) * 100" :cy="100 - (n * 2)" r="3" fill="var(--lime)" style="cursor:pointer">
+                      <svg viewBox="0 0 1000 100" preserveAspectRatio="none" class="svg-graph">
+                        <polyline :points="latencyPolyline" fill="none" stroke="var(--lime)" stroke-width="2" vector-effect="non-scaling-stroke" />
+                        <circle v-for="(n, index) in latencyData" :key="index" :cx="(index / (latencyData.length - 1)) * 1000" :cy="100 - (n * 2)" r="3" fill="var(--lime)" style="cursor:pointer">
                         </circle>
                       </svg>
                     </template>
                     <template v-else-if="userSettings.graphStyle === 'Area'">
-                      <svg viewBox="0 0 100 100" preserveAspectRatio="none" class="svg-graph">
-                        <polygon :points="latencyPolygon" fill="var(--lime-muted)" />
-                        <polyline :points="latencyPolyline" fill="none" stroke="var(--lime)" stroke-width="1.5" />
-                        <circle v-for="(n, index) in latencyData" :key="index" :cx="(index / (latencyData.length - 1)) * 100" :cy="100 - (n * 2)" r="3" fill="var(--lime)" style="cursor:pointer">
+                      <svg viewBox="0 0 1000 100" preserveAspectRatio="none" class="svg-graph">
+                        <polygon :points="latencyPolygon" fill="rgba(207, 255, 51, 0.18)" />
+                        <polyline :points="latencyPolyline" fill="none" stroke="var(--lime)" stroke-width="2" vector-effect="non-scaling-stroke" />
+                        <circle v-for="(n, index) in latencyData" :key="index" :cx="(index / (latencyData.length - 1)) * 1000" :cy="100 - (n * 2)" r="3" fill="var(--lime)" style="cursor:pointer">
                         </circle>
                       </svg>
                     </template>
@@ -1220,8 +1306,8 @@ onBeforeUnmount(() => {
                 <article class="panel traffic-panel"><div class="panel-title"><div><small>BANDWIDTH</small><h2>Network Traffic</h2></div><span>LIVE</span></div>
                   <div class="traffic-bars" @mousemove="handleGraphMouseMove($event, [15,22,38,45,60,78,92,85,74,68,54,42], 'BANDWIDTH', 'Mbps', 'Real-time Gateway Aggregation')" @mouseleave="hideGraphHover">
                     <svg viewBox="0 0 100 100" preserveAspectRatio="none" class="svg-graph">
-                      <polygon :points="egressPolygon" fill="var(--lime-muted)" />
-                      <polyline :points="egressPolyline" fill="none" stroke="var(--lime)" stroke-width="1.5" />
+                      <polygon :points="egressPolygon" fill="rgba(207, 255, 51, 0.15)" />
+                      <polyline :points="egressPolyline" fill="none" stroke="var(--lime)" stroke-width="2" />
                       <polygon :points="ingressPolygon" fill="rgba(167, 195, 72, 0.2)" />
                       <polyline :points="ingressPolyline" fill="none" stroke="var(--lime)" stroke-width="2.5" />
                     </svg>
@@ -1375,7 +1461,7 @@ onBeforeUnmount(() => {
                       :x2="link.x2" 
                       :y2="link.y2" 
                       stroke="var(--accent)" 
-                      stroke-width="1.5" 
+                      stroke-width="2" 
                       opacity="0.4"
                       stroke-dasharray="4 4"
                     />
@@ -1414,7 +1500,44 @@ onBeforeUnmount(() => {
             </template>
 
             <template v-else-if="route === 'reports'">
-              <div class="page-title"><div><small>ANALYTICS</small><h1>SLA & Reports</h1><p>Performance tracking and historical uptime metrics.</p></div><button class="outline-button" @click="printReport"><Download :size="15" /> Download PDF</button></div>
+              <div class="page-title"><div><small>ANALYTICS</small><h1>SLA & Reports</h1><p>Performance tracking and historical uptime metrics.</p></div>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                  <button class="signal-button compact" @click="generateCustomReport"><FileClock :size="14" /> Generate Report</button>
+                  <button class="outline-button" @click="printReport"><Download :size="15" /> Export PDF</button>
+                </div>
+              </div>
+
+              <!-- Reports Filter Bar -->
+              <div class="table-tools" style="margin-bottom: 20px;">
+                <div style="display: flex; gap: 12px; align-items: center; width: 100%;">
+                  <label style="min-width: auto; height: 34px;">
+                    <Clock :size="14" style="color: var(--lime);" />
+                    <select v-model="reportTimeframe" style="background: transparent; border: none; color: inherit; font-size: 11px; outline: none; cursor: pointer;">
+                      <option value="24h">Last 24 Hours</option>
+                      <option value="7d">Last 7 Days</option>
+                      <option value="30d">Last 30 Days (SLA)</option>
+                      <option value="90d">Last 90 Days</option>
+                    </select>
+                  </label>
+
+                  <label style="min-width: auto; height: 34px;">
+                    <Folder :size="14" style="color: var(--lime);" />
+                    <select v-model="selectedReportCategory" style="background: transparent; border: none; color: inherit; font-size: 11px; outline: none; cursor: pointer;">
+                      <option value="all">All Categories</option>
+                      <option v-for="cat in availableCategories" :key="cat" :value="cat">{{ cat }}</option>
+                    </select>
+                  </label>
+
+                  <label style="min-width: auto; height: 34px;">
+                    <Server :size="14" style="color: var(--lime);" />
+                    <select v-model="selectedReportDevice" style="background: transparent; border: none; color: inherit; font-size: 11px; outline: none; cursor: pointer;">
+                      <option value="all">All Devices ({{ devices.length }})</option>
+                      <option v-for="d in devices" :key="d.name" :value="d.name">{{ d.name }}</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+
               <div id="print-area">
                 <div class="print-header" style="display: none; padding: 20px; align-items: center; gap: 15px; border-bottom: 1px solid var(--border); margin-bottom: 20px;">
                    <img :src="brandLogo" style="height: 40px" />
@@ -1431,18 +1554,18 @@ onBeforeUnmount(() => {
                   <article class="panel report-panel">
                     <div class="panel-title"><div><small>NETWORK LATENCY</small><h2>Global Ping Response</h2></div></div>
                     <div class="chart-container">
-                      <svg viewBox="0 0 100 100" preserveAspectRatio="none" class="svg-graph">
+                      <svg viewBox="0 0 1000 100" preserveAspectRatio="none" class="svg-graph">
                         <polygon :points="latencyPolygon" fill="url(#latencyGrad)" opacity="0.3" />
-                        <polyline :points="latencyPolyline" fill="none" stroke="var(--accent)" stroke-width="2.5" />
+                        <polyline :points="latencyPolyline" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke" />
                       </svg>
                     </div>
                   </article>
                   <article class="panel report-panel">
                     <div class="panel-title"><div><small>BANDWIDTH</small><h2>Aggregated Throughput</h2></div></div>
                     <div class="chart-container">
-                      <svg viewBox="0 0 100 100" preserveAspectRatio="none" class="svg-graph">
+                      <svg viewBox="0 0 1000 100" preserveAspectRatio="none" class="svg-graph">
                         <polygon :points="polygonPoints" fill="url(#chartGrad)" opacity="0.3" />
-                        <polyline :points="polylinePoints" fill="none" stroke="var(--blue)" stroke-width="2.5" />
+                        <polyline :points="polylinePoints" fill="none" stroke="var(--blue)" stroke-width="2" vector-effect="non-scaling-stroke" />
                       </svg>
                     </div>
                   </article>
@@ -1475,8 +1598,22 @@ onBeforeUnmount(() => {
 
             <template v-else-if="route === 'logs'">
               <div class="page-title"><div><small>DIAGNOSTICS</small><h1>Live event stream</h1><p>Raw evidence from every active network check.</p></div><div style="display:flex;gap:10px;"><button v-if="currentUser?.permissions?.manage_settings" class="outline-button danger-button" style="color:var(--red);border-color:var(--red);" @click="clearLogs"><Eraser :size="15" /> Clear Logs</button><button class="outline-button" @click="exportLogs"><Download :size="15" /> Export CSV</button></div></div>
-              <div class="table-tools"><label><Search :size="16" /><input v-model="logSearch" placeholder="Search event stream..." /></label><div><button :class="{active: logStatusFilter === 'all'}" @click="logStatusFilter = 'all'">All</button><button :class="{active: logStatusFilter === 'success'}" @click="logStatusFilter = 'success'">Success</button><button :class="{active: logStatusFilter === 'fail'}" @click="logStatusFilter = 'fail'">Failures</button></div></div>
-              <section class="terminal-log"><div class="log-head"><span class="live-dot"></span><b>STREAM ACTIVE</b><small>{{ filteredLogs.length }} entries</small></div><div class="log-line" v-for="(log,index) in filteredLogs" :key="index"><span>{{ userSettings.timeFormat === '12h' ? new Date(log.timestamp).toLocaleString('en-US',{hour:'numeric',minute:'numeric',second:'numeric',hour12:true}).split(' ')[0] : log.timestamp.split(' ')[1] }}</span><b :class="{down: log.down}">{{ log.down ? 'FAIL' : 'OK' }}</b><strong>{{ log.device }}</strong><em>PING {{ log.ping || 'N/A' }}</em><em>HTTP {{ log.http || 'N/A' }}</em><small>{{ log.bandwidth || '—' }}</small></div><div v-if="!filteredLogs.length" class="empty-state"><TerminalSquare :size="24" /><strong>No logs match filter</strong><span>Try adjusting your search criteria.</span></div></section>
+              <div class="table-tools" style="display: flex; gap: 12px; align-items: center;">
+                <label style="flex: 1;"><Search :size="16" /><input v-model="logSearch" placeholder="Search logs by IP, device, timestamp, or protocol..." /></label>
+                <label style="min-width: 180px; height: 36px; display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); padding: 0 10px;">
+                  <Server :size="14" style="color: var(--lime);" />
+                  <select v-model="logSelectedDevice" style="background: transparent; border: none; color: inherit; font-size: 11px; outline: none; cursor: pointer; width: 100%;">
+                    <option value="all">All Devices ({{ devices.length }})</option>
+                    <option v-for="d in devices" :key="d.name" :value="d.name">{{ d.name }}</option>
+                  </select>
+                </label>
+                <div style="display: flex;">
+                  <button :class="{active: logStatusFilter === 'all'}" @click="logStatusFilter = 'all'">All Logs</button>
+                  <button :class="{active: logStatusFilter === 'success'}" @click="logStatusFilter = 'success'">Success (OK)</button>
+                  <button :class="{active: logStatusFilter === 'fail'}" @click="logStatusFilter = 'fail'">Failures (FAIL)</button>
+                </div>
+              </div>
+              <section class="terminal-log"><div class="log-head"><span class="live-dot"></span><b>STREAM ACTIVE</b><small>{{ advancedFilteredLogs.length }} entries</small></div><div class="log-line" v-for="(log,index) in advancedFilteredLogs" :key="index"><span>{{ userSettings.timeFormat === '12h' ? new Date(log.timestamp).toLocaleString('en-US',{hour:'numeric',minute:'numeric',second:'numeric',hour12:true}).split(' ')[0] : log.timestamp.split(' ')[1] }}</span><b :class="{down: log.down}">{{ log.down ? 'FAIL' : 'OK' }}</b><strong>{{ log.device }}</strong><em>PING {{ log.ping || 'N/A' }}</em><em>HTTP {{ log.http || 'N/A' }}</em><small>{{ log.bandwidth || '—' }}</small></div><div v-if="!advancedFilteredLogs.length" class="empty-state"><TerminalSquare :size="24" /><strong>No logs match filter</strong><span>Try adjusting your search criteria.</span></div></section>
             </template>
 
             <template v-else-if="route === 'settings'">
