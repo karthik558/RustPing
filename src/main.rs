@@ -4,34 +4,33 @@ extern crate rocket;
 mod models;
 mod sensors;
 mod email;
+mod db;
 
 use rocket::{get, post, delete, put, routes, State, response::Redirect, catch, catchers};
 use rocket::serde::json::Json;
 use rocket::fs::{NamedFile, FileServer, relative};
-use models::{Device as ModelDevice, SensorType};
+use models::{Device as ModelDevice, SensorType, User, UserRole, StatusPage, MaintenanceWindow, AuditLog};
 use log::{info, error};
-use sensors::{monitor_ping, monitor_http};
+use sensors::{monitor_ping, monitor_http, monitor_tcp_port, monitor_ssl_cert, monitor_dns_resolution, monitor_database_port};
+use db::Database;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use serde_json::{self, json};
-use serde_json::from_str;
 use std::path::Path;
-use tokio::time::{sleep, Duration};
+use tokio::time::Duration;
 use rand::Rng;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use std::collections::HashMap;
 use chrono::{NaiveDate, Local, DateTime};
 use rocket::response::content::RawText;
-use rocket::http::{Status};
+use rocket::http::Status;
 use rocket::request::{self, Request, FromRequest};
 use rocket::outcome::Outcome;
 use serde::Deserialize;
 use rocket::serde::Serialize;
 use email::EmailService;
 use std::sync::atomic::{AtomicPtr, Ordering};
-use serde_json::Value;
-use rocket::http::ContentType;
 
 static AUTH_CONFIG: AtomicPtr<serde_json::Value> = AtomicPtr::new(std::ptr::null_mut());
 
@@ -51,41 +50,16 @@ fn init_auth_config() {
     }
 }
 
-async fn process_logs(start_date_parsed: Option<NaiveDate>, end_date_parsed: Option<NaiveDate>) -> Vec<String> {
-    let mut filtered_logs = Vec::new();
-    if let Ok(contents) = fs::read_to_string(LOG_FILE) {
-        for line in contents.lines() {
-            if let Some((timestamp, rest)) = line.split_once(" - ") {
-                let date_str = &timestamp[..10]; 
-                if let Ok(entry_date) = NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
-                    let mut include = true;
-                    
-                    if let Some(start) = start_date_parsed {
-                        if entry_date < start {
-                            include = false;
-                        }
-                    }
-                    if let Some(end) = end_date_parsed {
-                        if entry_date > end {
-                            include = false;
-                        }
-                    }
-                    if include {
-                        filtered_logs.push(format!("{} - {}", timestamp, rest));
-                    }
-                }
-            }
-        }
-    }
-    filtered_logs
-}
-
-// Define a struct to track device status.
+// Struct to track device status runtime state
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct DeviceStatus {
     ping_status: Option<String>,
     http_status: Option<String>,
     bandwidth_usage: Option<f64>,
+    ssl_status: Option<String>,
+    dns_status: Option<String>,
+    db_status: Option<String>,
     last_update: DateTime<Local>,
     changed_at: DateTime<Local>,
 }
@@ -97,6 +71,9 @@ impl DeviceStatus {
             ping_status: None,
             http_status: None,
             bandwidth_usage: None,
+            ssl_status: None,
+            dns_status: None,
+            db_status: None,
             last_update: now,
             changed_at: now,
         }
@@ -113,15 +90,9 @@ impl DeviceStatus {
     }
 }
 
-// Use the new DeviceStatus struct in the type alias.
-type DeviceStatusMap = Arc<Mutex<HashMap<String, DeviceStatus>>>;
 type SharedDevices = Arc<Mutex<Vec<ModelDevice>>>;
-type DeviceList = Arc<Mutex<Vec<WebDevice>>>;
-
 static LOG_FILE: &str = "rustPing_running.log";
 
-// Serve the Vue monitoring console. Hash routing keeps login and operational
-// views on one resilient entry point while Rocket continues to own the API.
 #[get("/")]
 async fn index() -> Option<NamedFile> {
     NamedFile::open(Path::new("static/app/index.html")).await.ok()
@@ -132,14 +103,19 @@ async fn login_page() -> Option<NamedFile> {
     NamedFile::open(Path::new("static/app/index.html")).await.ok()
 }
 
-// API to get the list of devices.
+// API to get the list of devices from persistent database
 #[get("/devices")]
-async fn get_devices(_auth: Auth, devices: &State<SharedDevices>) -> Json<Vec<ModelDevice>> {
-    let devices_locked = devices.lock().await;
-    Json(devices_locked.clone())
+async fn get_devices(_auth: Auth, db: &State<Database>) -> Json<Vec<ModelDevice>> {
+    match db.get_devices() {
+        Ok(devices) => Json(devices),
+        Err(e) => {
+            error!("Failed to fetch devices from database: {}", e);
+            Json(vec![])
+        }
+    }
 }
 
-/// Export logs filtered by (optional) date range and device names.
+/// Export logs filtered by date range and device names
 #[get("/export_log?<devices>&<start_date>&<end_date>&<format>")]
 async fn export_log(
     devices: Option<&str>,
@@ -147,7 +123,6 @@ async fn export_log(
     end_date: Option<&str>,
     format: Option<&str>
 ) -> RawText<String> {
-    // Read the entire log file.
     let mut file_content = String::new();
     if let Ok(mut file) = OpenOptions::new().read(true).open(LOG_FILE) {
         if let Err(e) = file.read_to_string(&mut file_content) {
@@ -161,54 +136,35 @@ async fn export_log(
     let lines: Vec<&str> = file_content.lines().collect();
     let mut filtered_lines = Vec::new();
 
-    // Parse optional date filters.
-    let start_date_parsed: Option<NaiveDate> =
-        start_date.and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
-    let end_date_parsed: Option<NaiveDate> =
-        end_date.and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
+    let start_date_parsed: Option<NaiveDate> = start_date.and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
+    let end_date_parsed: Option<NaiveDate> = end_date.and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
 
-    // Split and trim device filter names (which could be names or IP addresses).
-    let device_filters: Option<Vec<String>> = devices.map(|d| {
-        d.split(',')
-         .map(|s| s.trim().to_lowercase())
-         .collect()
-    });
+    let device_filters: Option<Vec<String>> = devices.map(|d| d.split(',').map(|s| s.trim().to_lowercase()).collect());
     
-    // Process each log line.
     for line in lines {
-        // Retain lines starting with "//" (e.g. header lines).
         if line.starts_with("//") {
             filtered_lines.push(line);
             continue;
         }
         if let Some((timestamp, rest)) = line.split_once(" - ") {
-            // Extract device name and IP.
-            // Assuming rest is like: "Device: Network Switch, 192.168.0.100, Ping: FAIL, HTTP: N/A, Bandwidth: N/A"
             let parts: Vec<&str> = rest.split(',').collect();
             if parts.len() >= 2 {
-                let device_part = parts[0].trim(); // "Device: Network Switch"
-                let ip_part = parts[1].trim();       // "192.168.0.100"
+                let device_part = parts[0].trim();
+                let ip_part = parts[1].trim();
                 let device_name = device_part.trim_start_matches("Device:").trim().to_lowercase();
                 let device_ip = ip_part.to_lowercase();
                 
-                // Filter by date.
                 let mut include = true;
-                // Extract the date part from timestamp (first 10 characters)
                 let date_str = &timestamp[..10];
                 if let Ok(entry_date) = NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
                     if let Some(start) = start_date_parsed {
-                        if entry_date < start {
-                            include = false;
-                        }
+                        if entry_date < start { include = false; }
                     }
                     if let Some(end) = end_date_parsed {
-                        if entry_date > end {
-                            include = false;
-                        }
+                        if entry_date > end { include = false; }
                     }
                 }
                 
-                // Apply device/IP filters if provided.
                 if let Some(ref filters) = device_filters {
                     let mut found = false;
                     for f in filters {
@@ -217,9 +173,7 @@ async fn export_log(
                             break;
                         }
                     }
-                    if !found {
-                        include = false;
-                    }
+                    if !found { include = false; }
                 }
 
                 if include {
@@ -229,28 +183,19 @@ async fn export_log(
         }
     }
     
-    // Output formatting
     let output = if let Some(fmt) = format {
         if fmt.to_lowercase() == "csv" {
-            // CSV export implementation (e.g., create CSV lines)
             let mut csv_lines = vec!["Timestamp,Device Name,IP Address,Ping,HTTP,Bandwidth".to_string()];
             for line in filtered_lines {
                 if line.starts_with("//") { continue; }
                 if let Some((timestamp, rest)) = line.split_once(" - ") {
-                    // Extract device name, IP, and statuses.
                     let parts: Vec<&str> = rest.split(',').collect();
                     if parts.len() >= 2 {
                         let device_name = parts[0].trim().trim_start_matches("Device:").trim();
                         let device_ip = parts[1].trim();
-                        let ping = parts.get(2)
-                            .map(|s| s.replace("Ping:", "").trim().to_string())
-                            .unwrap_or_else(|| "N/A".to_string());
-                        let http = parts.get(3)
-                            .map(|s| s.replace("HTTP:", "").trim().to_string())
-                            .unwrap_or_else(|| "N/A".to_string());
-                        let bandwidth = parts.get(4)
-                            .map(|s| s.replace("Bandwidth:", "").trim().to_string())
-                            .unwrap_or_else(|| "N/A".to_string());
+                        let ping = parts.get(2).map(|s| s.replace("Ping:", "").trim().to_string()).unwrap_or_else(|| "N/A".to_string());
+                        let http = parts.get(3).map(|s| s.replace("HTTP:", "").trim().to_string()).unwrap_or_else(|| "N/A".to_string());
+                        let bandwidth = parts.get(4).map(|s| s.replace("Bandwidth:", "").trim().to_string()).unwrap_or_else(|| "N/A".to_string());
                         let csv_line = format!("{},{},{},{},{},{}", timestamp, device_name, device_ip, ping, http, bandwidth);
                         csv_lines.push(csv_line);
                     }
@@ -258,7 +203,6 @@ async fn export_log(
             }
             csv_lines.join("\n")
         } else {
-            // Plain text output.
             filtered_lines.join("\n")
         }
     } else {
@@ -268,9 +212,14 @@ async fn export_log(
     RawText(output)
 }
 
-/// New endpoint to expose logs as JSON.
 #[get("/logs_json")]
-async fn logs_json() -> Json<serde_json::Value> {
+async fn logs_json(db: &State<Database>) -> Json<serde_json::Value> {
+    if let Ok(db_logs) = db.get_sensor_logs(500) {
+        if !db_logs.is_empty() {
+            return Json(json!(db_logs));
+        }
+    }
+
     let mut file_content = String::new();
     if let Ok(mut file) = OpenOptions::new().read(true).open(LOG_FILE) {
         if let Err(e) = file.read_to_string(&mut file_content) {
@@ -278,7 +227,7 @@ async fn logs_json() -> Json<serde_json::Value> {
             return Json(json!({"error": "Failed to read log file"}));
         }
     } else {
-        return Json(json!({"error": "Log file not found"}));
+        return Json(json!([]));
     }
     let lines: Vec<&str> = file_content.lines().collect();
     let mut entries = Vec::new();
@@ -304,7 +253,6 @@ async fn logs_json() -> Json<serde_json::Value> {
                 }
             }
             let down = ping.to_lowercase() == "fail";
-            // Split timestamp into date and time.
             let ts_parts: Vec<&str> = timestamp.split(' ').collect();
             let date = ts_parts.get(0).unwrap_or(&"").to_string();
             let time = ts_parts.get(1).unwrap_or(&"").to_string();
@@ -324,44 +272,31 @@ async fn logs_json() -> Json<serde_json::Value> {
 }
 
 #[delete("/logs")]
-async fn delete_logs(_auth: Auth) -> Result<String, rocket::http::Status> {
+async fn delete_logs(_auth: Auth, db: &State<Database>) -> Result<String, Status> {
+    let _ = db.clear_sensor_logs();
     if let Err(e) = OpenOptions::new().write(true).truncate(true).open(LOG_FILE) {
         error!("Failed to clear log file: {}", e);
-        return Err(rocket::http::Status::InternalServerError);
+        return Err(Status::InternalServerError);
     }
+    let _ = db.log_audit("admin@rustping.local", "DELETE_LOGS", "System logs cleared by administrator");
     Ok("Logs cleared".to_string())
 }
 
-// Load devices from a JSON file.
-async fn add_devices_from_file(file_path: &str, devices: SharedDevices) {
-    let data = fs::read_to_string(file_path).expect("Unable to read file");
-    let mut file_devices: Vec<ModelDevice> = from_str(&data).expect("JSON was not well-formatted");
-    for dev in file_devices.iter_mut() {
-        dev.ping_status = None;
-        dev.bandwidth_usage = None;
-        dev.http_status = None;
-    }
-    let mut devices_locked = devices.lock().await;
-    devices_locked.append(&mut file_devices);
-}
-
-// Add this struct for authentication
 struct Auth;
 
+#[allow(dead_code)]
 #[derive(Debug)]
 enum AuthError {
     Missing,
     Invalid,
 }
 
-// Implement request guard for Auth
 #[rocket::async_trait]
 impl<'r> FromRequest<'r> for Auth {
     type Error = AuthError;
 
     async fn from_request(request: &'r Request<'_>) -> request::Outcome<Self, Self::Error> {
         let cookies = request.cookies();
-        
         match cookies.get("auth") {
             Some(cookie) if cookie.value() == "true" => Outcome::Success(Auth),
             _ => Outcome::Forward(Status::Unauthorized)
@@ -369,13 +304,11 @@ impl<'r> FromRequest<'r> for Auth {
     }
 }
 
-// Add catch handler for unauthorized requests
 #[catch(401)]
 fn unauthorized() -> Redirect {
     Redirect::to("/#/login")
 }
 
-// Web Device struct - this is separate from the model Device
 #[derive(Serialize, Deserialize, Clone)]
 struct WebDevice {
     name: String,
@@ -392,41 +325,10 @@ struct WebDevice {
     parent_device: Option<String>,
 }
 
-// Add this validation function
-fn validate_device(device: &WebDevice, devices: &[WebDevice], exclude_index: Option<usize>) -> Result<(), &'static str> {
-    // Check for empty or invalid values
-    if device.name.trim().is_empty() {
-        return Err("Device name cannot be empty");
-    }
-    if device.ip.trim().is_empty() {
-        return Err("IP address cannot be empty");
-    }
-    if device.category.trim().is_empty() {
-        return Err("Category cannot be empty");
-    }
-    if device.sensors.is_empty() {
-        return Err("At least one sensor must be selected");
-    }
-
-    // Check for duplicates (excluding the current device if updating)
-    for (index, existing) in devices.iter().enumerate() {
-        if let Some(exclude) = exclude_index {
-            if index == exclude {
-                continue;
-            }
-        }
-        if existing.name == device.name {
-            return Err("Device name already exists");
-        }
-    }
-
-    Ok(())
-}
-
-// Add this implementation before the add_web_device function
 impl From<WebDevice> for ModelDevice {
     fn from(web_device: WebDevice) -> Self {
         ModelDevice {
+            id: None,
             name: web_device.name,
             ip: web_device.ip,
             category: web_device.category,
@@ -438,6 +340,9 @@ impl From<WebDevice> for ModelDevice {
                     "Bandwidth" => SensorType::Bandwidth,
                     "Port" => SensorType::Port,
                     "Snmp" => SensorType::Snmp,
+                    "SslCert" => SensorType::SslCert,
+                    "Dns" => SensorType::Dns,
+                    "Database" => SensorType::Database,
                     _ => SensorType::Ping
                 })
                 .collect(),
@@ -448,14 +353,16 @@ impl From<WebDevice> for ModelDevice {
             ping_status: None,
             http_status: None,
             bandwidth_usage: None,
+            ssl_status: None,
+            dns_status: None,
+            db_status: None,
         }
     }
 }
 
-// Then modify the add_web_device function to use the conversion
 #[post("/devices", data = "<device>")]
-async fn add_web_device(device: &str, devices: &State<SharedDevices>) -> Status {
-    let new_device: WebDevice = match serde_json::from_str(device) {
+async fn add_web_device(device: &str, db: &State<Database>, devices: &State<SharedDevices>) -> Status {
+    let new_web_device: WebDevice = match serde_json::from_str(device) {
         Ok(dev) => dev,
         Err(e) => {
             error!("Failed to parse device JSON: {}", e);
@@ -463,103 +370,38 @@ async fn add_web_device(device: &str, devices: &State<SharedDevices>) -> Status 
         }
     };
 
-    // Read and validate against existing devices
-    let file_path = "devices.json";
-    let content = match fs::read_to_string(file_path) {
-        Ok(content) => content,
+    let model_dev = ModelDevice::from(new_web_device);
+    match db.save_device(&model_dev) {
+        Ok(id) => {
+            let mut dev_with_id = model_dev.clone();
+            dev_with_id.id = Some(id);
+            let mut devices_locked = devices.lock().await;
+            devices_locked.push(dev_with_id);
+            let _ = db.log_audit("admin@rustping.local", "CREATE_DEVICE", &format!("Created device {}", model_dev.name));
+            Status::Ok
+        }
         Err(e) => {
-            error!("Failed to read devices.json: {}", e);
-            return Status::InternalServerError;
+            error!("Failed to save device in DB: {}", e);
+            Status::InternalServerError
         }
-    };
-
-    let mut file_devices: Vec<WebDevice> = match serde_json::from_str(&content) {
-        Ok(devices) => devices,
-        Err(e) => {
-            error!("Failed to parse devices.json: {}", e);
-            return Status::InternalServerError;
-        }
-    };
-
-    // Validate new device
-    if let Err(e) = validate_device(&new_device, &file_devices, None) {
-        error!("Validation failed: {}", e);
-        return Status::BadRequest;
     }
-
-    // Add device and write to file atomically
-    file_devices.push(new_device.clone());
-    if let Ok(json) = serde_json::to_string_pretty(&file_devices) {
-        let temp_path = format!("{}.tmp", file_path);
-        if let Err(e) = fs::write(&temp_path, &json) {
-            error!("Failed to write temporary file: {}", e);
-            return Status::InternalServerError;
-        }
-        if let Err(e) = fs::rename(&temp_path, file_path) {
-            error!("Failed to rename temporary file: {}", e);
-            return Status::InternalServerError;
-        }
-    } else {
-        return Status::InternalServerError;
-    }
-
-    // Update in-memory state using From trait
-    let mut devices_locked = devices.lock().await;
-    devices_locked.push(ModelDevice::from(new_device.clone()));
-
-    Status::Ok
 }
 
 #[delete("/devices/<index>")]
-async fn delete_web_device(index: usize) -> Status {
-    let file_path = "devices.json";
-    
-    // Read existing devices
-    let content = match fs::read_to_string(file_path) {
-        Ok(content) => content,
-        Err(e) => {
-            error!("Failed to read devices.json: {}", e);
-            return Status::InternalServerError;
-        }
-    };
-    
-    let mut devices: Vec<WebDevice> = match serde_json::from_str(&content) {
-        Ok(devices) => devices,
-        Err(e) => {
-            error!("Failed to parse devices.json: {}", e);
-            return Status::InternalServerError;
-        }
-    };
-    
-    // Check if index is valid
-    if index >= devices.len() {
+async fn delete_web_device(index: usize, db: &State<Database>, devices: &State<SharedDevices>) -> Status {
+    let mut devices_locked = devices.lock().await;
+    if index >= devices_locked.len() {
         return Status::NotFound;
     }
-    
-    // Remove device at the specified index
-    devices.remove(index);
-    
-    // Write updated devices back to file
-    match serde_json::to_string_pretty(&devices) {
-        Ok(json) => {
-            if let Err(e) = fs::write(file_path, json) {
-                error!("Failed to write devices.json: {}", e);
-                return Status::InternalServerError;
-            }
-        },
-        Err(e) => {
-            error!("Failed to serialize devices: {}", e);
-            return Status::InternalServerError;
-        }
-    }
-    
+    let dev = devices_locked.remove(index);
+    let _ = db.delete_device(&dev.name);
+    let _ = db.log_audit("admin@rustping.local", "DELETE_DEVICE", &format!("Deleted device {}", dev.name));
     Status::Ok
 }
 
-// Update the update_device endpoint
 #[put("/devices/<id>", data = "<device>")]
-async fn update_device(id: usize, device: &str, devices: &State<SharedDevices>) -> Status {
-    let updated_device: WebDevice = match serde_json::from_str(device) {
+async fn update_device(id: usize, device: &str, db: &State<Database>, devices: &State<SharedDevices>) -> Status {
+    let updated_web_device: WebDevice = match serde_json::from_str(device) {
         Ok(dev) => dev,
         Err(e) => {
             error!("Failed to parse device JSON: {}", e);
@@ -567,180 +409,175 @@ async fn update_device(id: usize, device: &str, devices: &State<SharedDevices>) 
         }
     };
 
-    // Read current devices from file
-    let file_path = "devices.json";
-    let content = match fs::read_to_string(file_path) {
-        Ok(content) => content,
-        Err(e) => {
-            error!("Failed to read devices.json: {}", e);
-            return Status::InternalServerError;
-        }
-    };
-
-    let mut file_devices: Vec<WebDevice> = match serde_json::from_str(&content) {
-        Ok(devices) => devices,
-        Err(e) => {
-            error!("Failed to parse devices.json: {}", e);
-            return Status::InternalServerError;
-        }
-    };
-
-    // Check if index is valid
-    if id >= file_devices.len() {
-        error!("Device index {} out of bounds", id);
+    let mut devices_locked = devices.lock().await;
+    if id >= devices_locked.len() {
         return Status::NotFound;
     }
 
-    // Check for duplicates (excluding current device)
-    if file_devices.iter().enumerate().any(|(i, d)| 
-        i != id && (d.name == updated_device.name || d.ip == updated_device.ip)
-    ) {
-        error!("Device with same name or IP already exists");
-        return Status::Conflict;
-    }
-
-    // Update device in file array
-    file_devices[id] = updated_device.clone();
-
-    // Write to file atomically
-    let temp_path = format!("{}.tmp", file_path);
-    if let Ok(json) = serde_json::to_string_pretty(&file_devices) {
-        if let Err(e) = fs::write(&temp_path, &json) {
-            error!("Failed to write temporary file: {}", e);
-            return Status::InternalServerError;
-        }
-        if let Err(e) = fs::rename(&temp_path, file_path) {
-            error!("Failed to rename temporary file: {}", e);
-            return Status::InternalServerError;
-        }
-    } else {
+    let mut model_dev = ModelDevice::from(updated_web_device);
+    model_dev.id = devices_locked[id].id.clone();
+    
+    if let Err(e) = db.save_device(&model_dev) {
+        error!("Failed to update device in database: {}", e);
         return Status::InternalServerError;
     }
 
-    // Update in-memory device
-    let mut devices_locked = devices.lock().await;
-    if id < devices_locked.len() {
-        devices_locked[id] = ModelDevice {
-            name: updated_device.name,
-            ip: updated_device.ip,
-            category: updated_device.category,
-            sensors: updated_device.sensors.iter()
-                .map(|s| match s.as_str() {
-                    "Ping" => SensorType::Ping,
-                    "Http" => SensorType::Http,
-                    "Https" => SensorType::Https,
-                    "Bandwidth" => SensorType::Bandwidth,
-                    "Port" => SensorType::Port,
-                    "Snmp" => SensorType::Snmp,
-                    _ => SensorType::Ping
-                })
-                .collect(),
-            http_path: updated_device.http_path,
-            port: updated_device.port,
-            snmp_community: updated_device.snmp_community,
-            parent_device: updated_device.parent_device,
-            ping_status: None,
-            http_status: None,
-            bandwidth_usage: None,
-        };
-    }
-
+    devices_locked[id] = model_dev.clone();
+    let _ = db.log_audit("admin@rustping.local", "UPDATE_DEVICE", &format!("Updated device {}", model_dev.name));
     Status::Ok
 }
 
-// Add this function to reload devices from file
-async fn reload_devices_from_file(file_path: &str, devices: SharedDevices) {
-    match fs::read_to_string(file_path) {
-        Ok(data) => {
-            match from_str::<Vec<ModelDevice>>(&data) {
-                Ok(mut file_devices) => {
-                    // Initialize device status fields to None
-                    for dev in file_devices.iter_mut() {
-                        dev.ping_status = None;
-                        dev.bandwidth_usage = None;
-                        dev.http_status = None;
-                    }
-                    
-                    // Update the shared devices list
-                    let mut devices_locked = devices.lock().await;
-                    *devices_locked = file_devices;
-                    info!("Devices reloaded from file: {}", file_path);
-                },
-                Err(e) => error!("Failed to parse devices file: {}", e)
-            }
-        },
-        Err(e) => error!("Failed to read devices file: {}", e)
+// User RBAC Management Endpoints (Feature 1)
+#[get("/api/users")]
+async fn get_users(_auth: Auth, db: &State<Database>) -> Json<Vec<User>> {
+    match db.get_users() {
+        Ok(users) => Json(users),
+        Err(_) => Json(vec![]),
     }
 }
 
-use env_logger;
-
-#[get("/api/email/config")]
-async fn get_email_config(email_service: &State<Arc<EmailService>>) -> Json<serde_json::Value> {
-    let config = email_service.get_config().await;
-    Json(json!(config))
+#[derive(Deserialize)]
+struct CreateUserReq {
+    email: String,
+    role: String,
 }
 
-#[post("/api/email/config", data = "<config>")]
-async fn update_email_config(
-    email_service: &State<Arc<EmailService>>,
-    config: Json<email::EmailConfig>,
-) -> Result<Json<serde_json::Value>, Status> {
-    match email_service.update_config(config.into_inner()).await {
-        Ok(_) => Ok(Json(json!({
-            "status": "success",
-            "message": "Email configuration updated successfully"
-        }))),
+#[post("/api/users", data = "<user_req>")]
+async fn create_user(_auth: Auth, user_req: Json<CreateUserReq>, db: &State<Database>) -> Result<Json<User>, Status> {
+    let role = UserRole::from_str(&user_req.role);
+    match db.add_user(&user_req.email, role) {
+        Ok(user) => {
+            let _ = db.log_audit("admin@rustping.local", "CREATE_USER", &format!("Created user {} with role {}", user.email, user.role.as_str()));
+            Ok(Json(user))
+        }
         Err(e) => {
-            error!("Failed to update email config: {}", e);
+            error!("Failed to create user: {}", e);
             Err(Status::InternalServerError)
         }
     }
 }
 
-#[derive(Deserialize)]
-struct TestEmailRequest {
-    test_email: String,
+#[get("/api/audit-logs")]
+async fn get_audit_logs(_auth: Auth, db: &State<Database>) -> Json<Vec<AuditLog>> {
+    match db.get_audit_logs() {
+        Ok(logs) => Json(logs),
+        Err(_) => Json(vec![]),
+    }
 }
 
-#[post("/api/email/config/test", data = "<request>")]
-async fn send_test_email(
-    email_service: &State<Arc<EmailService>>,
-    request: Json<TestEmailRequest>,
-) -> Result<Json<serde_json::Value>, Json<serde_json::Value>> {
-    match email_service.send_test_email(&request.test_email).await {
-        Ok(_) => Ok(Json(json!({
-            "status": "success",
-            "message": "Test email sent successfully"
-        }))),
+// Public & Private Status Page Endpoints (Feature 4)
+#[get("/api/status-pages")]
+async fn get_status_pages(db: &State<Database>) -> Json<Vec<StatusPage>> {
+    match db.get_status_pages() {
+        Ok(pages) => Json(pages),
+        Err(_) => Json(vec![]),
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateStatusPageReq {
+    title: String,
+    slug: String,
+    description: String,
+    is_public: bool,
+}
+
+#[post("/api/status-pages", data = "<sp_req>")]
+async fn create_status_page(_auth: Auth, sp_req: Json<CreateStatusPageReq>, db: &State<Database>) -> Result<Json<StatusPage>, Status> {
+    match db.create_status_page(&sp_req.title, &sp_req.slug, &sp_req.description, sp_req.is_public) {
+        Ok(page) => {
+            let _ = db.log_audit("admin@rustping.local", "CREATE_STATUS_PAGE", &format!("Created status page {}", page.title));
+            Ok(Json(page))
+        }
+        Err(e) => {
+            error!("Failed to create status page: {}", e);
+            Err(Status::InternalServerError)
+        }
+    }
+}
+
+// Public Status View Route
+#[get("/status/<slug>")]
+async fn render_public_status(slug: &str) -> Option<NamedFile> {
+    info!("Rendering public status page for slug: {}", slug);
+    NamedFile::open(Path::new("static/app/index.html")).await.ok()
+}
+
+// Maintenance Window Management Endpoints
+#[get("/api/maintenance")]
+async fn get_maintenance_windows(db: &State<Database>) -> Json<Vec<MaintenanceWindow>> {
+    match db.get_maintenance_windows() {
+        Ok(windows) => Json(windows),
+        Err(_) => Json(vec![]),
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateMaintenanceReq {
+    title: String,
+    start_time: String,
+    end_time: String,
+}
+
+#[post("/api/maintenance", data = "<m_req>")]
+async fn create_maintenance_window(_auth: Auth, m_req: Json<CreateMaintenanceReq>, db: &State<Database>) -> Result<Json<MaintenanceWindow>, Status> {
+    match db.add_maintenance_window(&m_req.title, &m_req.start_time, &m_req.end_time) {
+        Ok(win) => {
+            let _ = db.log_audit("admin@rustping.local", "CREATE_MAINTENANCE", &format!("Scheduled maintenance: {}", win.title));
+            Ok(Json(win))
+        }
+        Err(e) => {
+            error!("Failed to create maintenance window: {}", e);
+            Err(Status::InternalServerError)
+        }
+    }
+}
+
+// Email configuration REST APIs
+#[get("/api/email/config")]
+async fn get_email_config(_auth: Auth, email_service: &State<EmailService>) -> Json<email::EmailConfig> {
+    let config = email_service.get_config().await;
+    Json(config)
+}
+
+#[post("/api/email/config", data = "<config>")]
+async fn update_email_config(_auth: Auth, config: Json<email::EmailConfig>, email_service: &State<EmailService>) -> Status {
+    match email_service.update_config(config.into_inner()).await {
+        Ok(_) => Status::Ok,
+        Err(e) => {
+            error!("Failed to update email config: {}", e);
+            Status::InternalServerError
+        }
+    }
+}
+
+#[post("/api/email/config/test")]
+async fn send_test_email(_auth: Auth, email_service: &State<EmailService>) -> Status {
+    let test_addr = email_service.get_config().await.recipients.first().cloned().unwrap_or_else(|| "admin@rustping.local".to_string());
+    match email_service.send_test_email(&test_addr).await {
+        Ok(_) => Status::Ok,
         Err(e) => {
             error!("Failed to send test email: {}", e);
-            Err(Json(json!({
-                "status": "error",
-                "message": e.to_string()
-            })))
+            Status::InternalServerError
         }
     }
 }
 
 #[tokio::main]
 async fn main() {
-    // Initialize AUTH_CONFIG
+    env_logger::init();
+    info!("Starting RustPing Enterprise Infrastructure Monitor...");
     init_auth_config();
-    
-    // Initialize logger with debug level
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug"))
-        .init();
-    
-    info!("Starting RustPing Network Device Monitor...");
 
-    let devices: SharedDevices = Arc::new(Mutex::new(Vec::new()));
-    let email_service = Arc::new(EmailService::new());
-    
+    let db = Database::new("rustping_enterprise.db").expect("Failed to initialize database engine");
+    let initial_devices = db.get_devices().unwrap_or_default();
+    let devices: SharedDevices = Arc::new(Mutex::new(initial_devices));
+    let email_service = EmailService::new();
+
     let rocket_instance = rocket::build()
         .manage(devices.clone())
+        .manage(db.clone())
         .manage(email_service.clone())
-        .mount("/static", FileServer::from(relative!("static")).rank(2))
         .mount("/", routes![
             index,
             login_page,
@@ -754,26 +591,22 @@ async fn main() {
             get_email_config,
             update_email_config,
             send_test_email,
+            get_users,
+            create_user,
+            get_audit_logs,
+            get_status_pages,
+            create_status_page,
+            render_public_status,
+            get_maintenance_windows,
+            create_maintenance_window,
         ])
+        .mount("/static", FileServer::from(relative!("static")))
         .register("/", catchers![unauthorized]);
 
-    add_devices_from_file("devices.json", devices.clone()).await;
-
-    // Spawn a periodic task to reload devices
-    let devices_for_reload = devices.clone();
-    tokio::spawn(async move {
-        loop {
-            // Wait for 30 seconds
-            sleep(Duration::from_secs(30)).await;
-            
-            // Reload devices
-            reload_devices_from_file("devices.json", devices_for_reload.clone()).await;
-        }
-    });
-
-    // Spawn a background task.
+    // Spawn Background Multi-Protocol Synthetic Monitoring Engine Loop
     let devices_clone = devices.clone();
     let email_service_clone = email_service.clone();
+    let db_clone = db.clone();
 
     tokio::spawn(async move {
         let mut device_statuses: HashMap<String, DeviceStatus> = HashMap::new();
@@ -790,9 +623,6 @@ async fn main() {
 
             let mut status_changed = false;
 
-            // Network probes run concurrently and never hold the shared device
-            // lock. This keeps the API responsive even when a target is slow.
-            // To evaluate parent dependency, we need a map of current device statuses before checking
             let parent_statuses: HashMap<String, String> = {
                 let locked = devices_clone.lock().await;
                 locked.iter().map(|d| (d.name.clone(), d.ping_status.clone().unwrap_or("Checking".to_string()))).collect()
@@ -802,63 +632,81 @@ async fn main() {
                 devices_to_monitor.into_iter().map(|dev| {
                     let parent_statuses = parent_statuses.clone();
                     async move {
-                    // Check parent logic
-                    if let Some(parent) = &dev.parent_device {
-                        if let Some(status) = parent_statuses.get(parent) {
-                            if status == "Down" || status == "Unreachable" {
-                                return (dev, "Unreachable".to_string(), Some("Unreachable".to_string()), None);
+                        if let Some(parent) = &dev.parent_device {
+                            if let Some(status) = parent_statuses.get(parent) {
+                                if status == "Down" || status == "Unreachable" {
+                                    return (dev, "Unreachable".to_string(), Some("Unreachable".to_string()), None, None, None, None);
+                                }
                             }
                         }
-                    }
 
-                    // Proceed with actual monitoring
-                    let mut is_up = true;
-                    if dev.sensors.contains(&SensorType::Ping) {
-                        is_up = is_up && sensors::monitor_ping(&dev.ip).await;
-                    }
-                    if dev.sensors.contains(&SensorType::Port) {
-                        if let Some(port) = dev.port {
-                            is_up = is_up && sensors::monitor_tcp_port(&dev.ip, port).await;
+                        let mut is_up = true;
+                        if dev.sensors.contains(&SensorType::Ping) {
+                            is_up = is_up && monitor_ping(&dev.ip).await;
                         }
-                    }
+                        if dev.sensors.contains(&SensorType::Port) {
+                            if let Some(port) = dev.port {
+                                is_up = is_up && monitor_tcp_port(&dev.ip, port).await;
+                            }
+                        }
 
-                    let ping_result_str = if is_up { "Up".to_string() } else { "Down".to_string() };
+                        let ping_result_str = if is_up { "Up".to_string() } else { "Down".to_string() };
 
-                    let has_http_sensor = dev.sensors.contains(&SensorType::Http)
-                        || dev.sensors.contains(&SensorType::Https);
-
-                    let (http_status, mut bandwidth_usage) = if is_up && has_http_sensor {
-                        if let Some(ref url) = dev.http_path {
-                            if sensors::monitor_http(url).await {
-                                (Some("Up".to_string()), Some(rand::thread_rng().gen_range(10.0..1000.0)))
+                        let has_http_sensor = dev.sensors.contains(&SensorType::Http) || dev.sensors.contains(&SensorType::Https);
+                        let (http_status, mut bandwidth_usage) = if is_up && has_http_sensor {
+                            if let Some(ref url) = dev.http_path {
+                                if monitor_http(url).await {
+                                    (Some("Up".to_string()), Some(rand::thread_rng().gen_range(10.0..1000.0)))
+                                } else {
+                                    (Some("Down".to_string()), None)
+                                }
                             } else {
                                 (Some("Down".to_string()), None)
                             }
-                        } else {
+                        } else if has_http_sensor {
                             (Some("Down".to_string()), None)
-                        }
-                    } else if has_http_sensor {
-                        (Some("Down".to_string()), None)
-                    } else {
-                        (None, None)
-                    };
+                        } else {
+                            (None, None)
+                        };
 
-                    if is_up && dev.sensors.contains(&SensorType::Snmp) {
-                        if let Some(community) = &dev.snmp_community {
-                            if let Some(bw) = sensors::monitor_snmp_bandwidth(&dev.ip, community).await {
-                                bandwidth_usage = Some(bw);
+                        if is_up && dev.sensors.contains(&SensorType::Snmp) {
+                            if let Some(community) = &dev.snmp_community {
+                                if let Some(bw) = sensors::monitor_snmp_bandwidth(&dev.ip, community).await {
+                                    bandwidth_usage = Some(bw);
+                                }
                             }
                         }
-                    }
 
-                    (dev, ping_result_str, http_status, bandwidth_usage)
-                }})
+                        // Synthetic SSL Expiration Probe (Feature 5)
+                        let ssl_status = if dev.sensors.contains(&SensorType::SslCert) {
+                            Some(monitor_ssl_cert(&dev.ip).await)
+                        } else {
+                            None
+                        };
+
+                        // Synthetic DNS Resolution Probe (Feature 5)
+                        let dns_status = if dev.sensors.contains(&SensorType::Dns) {
+                            Some(monitor_dns_resolution(&dev.ip).await)
+                        } else {
+                            None
+                        };
+
+                        // Database Response Probe (Feature 5)
+                        let db_status = if dev.sensors.contains(&SensorType::Database) {
+                            let port = dev.port.unwrap_or(5432);
+                            Some(monitor_database_port(&dev.ip, port).await)
+                        } else {
+                            None
+                        };
+
+                        (dev, ping_result_str, http_status, bandwidth_usage, ssl_status, dns_status, db_status)
+                    }
+                })
             ).await;
 
             let mut devices_locked = devices_clone.lock().await;
-            for (dev, ping_result, http_status, bandwidth_usage) in check_results {
-                let status = device_statuses.entry(dev.ip.clone())
-                    .or_insert_with(DeviceStatus::new);
+            for (dev, ping_result, http_status, bandwidth_usage, ssl_status, dns_status, db_status) in check_results {
+                let status = device_statuses.entry(dev.ip.clone()).or_insert_with(DeviceStatus::new);
                 
                 if status.update_ping(ping_result.clone()) {
                     status_changed = true;
@@ -868,80 +716,83 @@ async fn main() {
                     if device.ping_status != Some(ping_result.clone()) || device.http_status != http_status {
                         status_changed = true;
                     }
-                    device.ping_status = Some(ping_result);
-                    device.http_status = http_status;
+                    device.ping_status = Some(ping_result.clone());
+                    device.http_status = http_status.clone();
                     device.bandwidth_usage = bandwidth_usage;
+                    device.ssl_status = ssl_status.clone();
+                    device.dns_status = dns_status.clone();
+                    device.db_status = db_status.clone();
+
+                    let _ = db_clone.update_device_statuses(
+                        &device.name,
+                        Some(&ping_result),
+                        http_status.as_deref(),
+                        bandwidth_usage,
+                        ssl_status.as_deref(),
+                        dns_status.as_deref(),
+                        db_status.as_deref(),
+                    );
                 }
             }
             drop(devices_locked);
 
-            // Write to log file when status changes
-            if status_changed {
-                if let Ok(mut file) = OpenOptions::new().append(true).create(true).open(LOG_FILE) {
-                    let now = Local::now();
-                    let devices_locked = devices_clone.lock().await;
+            let now = Local::now();
+            let ts_str = now.format("%Y-%m-%d %H:%M:%S").to_string();
+
+            if let Ok(mut file) = OpenOptions::new().append(true).create(true).open(LOG_FILE) {
+                let devices_locked = devices_clone.lock().await;
+                
+                for dev in devices_locked.iter() {
+                    let status = device_statuses.get(&dev.ip).cloned().unwrap_or_else(DeviceStatus::new);
+                    let http_status = if dev.sensors.contains(&SensorType::Http) || dev.sensors.contains(&SensorType::Https) {
+                        dev.http_status.as_deref().unwrap_or("FAIL")
+                    } else {
+                        "N/A"
+                    };
                     
-                    for dev in devices_locked.iter() {
-                        let status = device_statuses.get(&dev.ip)
-                            .cloned()
-                            .unwrap_or_else(DeviceStatus::new);
-                        
-                        // Format HTTP status and bandwidth based on sensor configuration
-                        let http_status = if dev.sensors.contains(&SensorType::Http) || 
-                                           dev.sensors.contains(&SensorType::Https) {
-                            dev.http_status.as_deref().unwrap_or("FAIL")
-                        } else {
-                            "N/A"
+                    let bandwidth = if (dev.sensors.contains(&SensorType::Http) || dev.sensors.contains(&SensorType::Https) || dev.sensors.contains(&SensorType::Snmp)) && dev.ping_status.as_deref() == Some("Up") {
+                        dev.bandwidth_usage.map_or("N/A".to_string(), |b| format!("{:.2} Mbps", b))
+                    } else {
+                        "N/A".to_string()
+                    };
+                    
+                    let ping_status_str = status.ping_status.as_deref().unwrap_or("N/A");
+                    
+                    let log_entry = format!(
+                        "{} - {} ({}): Ping: {}, HTTP: {}, Bandwidth: {}\n",
+                        ts_str,
+                        dev.name,
+                        dev.ip,
+                        ping_status_str,
+                        http_status,
+                        bandwidth
+                    );
+                    
+                    if let Err(e) = file.write_all(log_entry.as_bytes()) {
+                        error!("Failed to write log entry: {}", e);
+                    }
+
+                    let _ = db_clone.add_sensor_log(&dev.name, &dev.ip, ping_status_str, http_status, &bandwidth, &ts_str);
+                    
+                    if status_changed && (ping_status_str == "FAIL" || http_status == "FAIL") {
+                        let log_data = email::LogData {
+                            date: now.format("%Y-%m-%d").to_string(),
+                            time: now.format("%H:%M:%S").to_string(),
+                            ping_status: ping_status_str.to_string(),
+                            http_status: http_status.to_string(),
+                            bandwidth: bandwidth.clone(),
                         };
                         
-                        let bandwidth = if (dev.sensors.contains(&SensorType::Http) || 
-                                         dev.sensors.contains(&SensorType::Https) || dev.sensors.contains(&SensorType::Snmp)) && 
-                                         dev.ping_status.as_deref() == Some("Up") {
-                            dev.bandwidth_usage.map_or("N/A".to_string(), |b| format!("{:.2} Mbps", b))
-                        } else {
-                            "N/A".to_string()
-                        };
-                        
-                        let ping_status_str = status.ping_status.as_deref().unwrap_or("N/A");
-                        
-                        let log_entry = format!(
-                            "{} - {} ({}): Ping: {}, HTTP: {}, Bandwidth: {}\n",
-                            now.format("%Y-%m-%d %H:%M:%S"),
-                            dev.name,
-                            dev.ip,
-                            ping_status_str,
-                            http_status,
-                            bandwidth
-                        );
-                        
-                        if let Err(e) = file.write_all(log_entry.as_bytes()) {
-                            error!("Failed to write log entry: {}", e);
-                        }
-                        
-                        // Send email notification if ping or HTTP status is FAIL
-                        if ping_status_str == "FAIL" || http_status == "FAIL" {
-                            // Create LogData for email
-                            let log_data = email::LogData {
-                                date: now.format("%Y-%m-%d").to_string(),
-                                time: now.format("%H:%M:%S").to_string(),
-                                ping_status: ping_status_str.to_string(),
-                                http_status: http_status.to_string(),
-                                bandwidth: bandwidth.clone(),
-                            };
-                            
-                            // Send email notification in a separate task to avoid blocking
-                            let device_name = dev.name.clone();
-                            let email_service_clone = email_service_clone.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = email_service_clone.send_email(&device_name, &log_data).await {
-                                    error!("Failed to send email notification: {}", e);
-                                }
-                            });
-                        }
+                        let device_name = dev.name.clone();
+                        let email_service_clone = email_service_clone.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = email_service_clone.send_email(&device_name, &log_data).await {
+                                error!("Failed to send email notification: {}", e);
+                            }
+                        });
                     }
                 }
             }
-
         }
     });
 

@@ -2,7 +2,6 @@ use anyhow::Result;
 use lettre::{
     transport::smtp::authentication::Credentials,
     AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
-    transport::smtp::client::SmtpConnection,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -18,7 +17,9 @@ use std::collections::HashMap;
 
 const CONFIG_FILE: &str = "email_config.json";
 const SMTP_TIMEOUT: Duration = Duration::from_secs(30); // Increased timeout to 30 seconds
+#[allow(dead_code)]
 const NOTIFICATION_INTERVAL: Duration = Duration::from_secs(1800); // 30 minutes
+#[allow(dead_code)]
 const LOG_COLLECTION_PERIOD: Duration = Duration::from_secs(1800); // 30 minutes
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -46,6 +47,7 @@ impl Default for EmailConfig {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct DeviceStatus {
     pub name: String,
@@ -58,6 +60,8 @@ pub struct DeviceStatus {
     pub last_failure: Option<String>,
 }
 
+#[allow(dead_code)]
+#[derive(Clone)]
 pub struct EmailService {
     config: Arc<RwLock<EmailConfig>>,
     mailer: Arc<RwLock<Option<AsyncSmtpTransport<Tokio1Executor>>>>,
@@ -189,6 +193,7 @@ impl EmailService {
         Ok(mailer_lock.as_ref().unwrap().clone())
     }
 
+    #[allow(dead_code)]
     pub async fn add_notification(&self, device_name: &str, status: &str, log_data: &LogData) -> Result<()> {
         let device_status = DeviceStatus {
             name: device_name.to_string(),
@@ -234,6 +239,7 @@ impl EmailService {
         Ok(())
     }
 
+    #[allow(dead_code)]
     async fn send_batch_notification(&self) -> Result<()> {
         let notifications = self.pending_notifications.read().await;
         let history = self.device_status_history.read().await;
