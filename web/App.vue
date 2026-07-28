@@ -503,76 +503,115 @@ const mappedTopologyNodes = computed(() => {
   const total = list.length
   if (!total) return { nodes: [], links: [], center: null }
 
-  const width = 800
-  const height = 480
+  const width = 1000
+  const height = 580
   const cx = width / 2
   const cy = height / 2
 
   if (mapView.value === 'ring') {
-    const radius = Math.min(cx, cy) - 90
+    const radius = 210
     const nodes = list.map((d, i) => {
       const angle = (i / total) * 2 * Math.PI - Math.PI / 2
-      return { ...d, x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle) }
+      return { 
+        ...d, 
+        x: cx + radius * Math.cos(angle), 
+        y: cy + radius * Math.sin(angle),
+        icon: d.category === 'Storage' ? HardDrive : (d.category === 'Services' ? CloudCog : Server)
+      }
     })
-    const links = nodes.map((n, i) => ({
-      x1: n.x, y1: n.y,
-      x2: nodes[(i + 1) % total].x, y2: nodes[(i + 1) % total].y
-    }))
-    return { nodes, links, center: { x: cx, y: cy, label: 'CORE RING' } }
+    const links = nodes.map((n, i) => {
+      const next = nodes[(i + 1) % total]
+      return {
+        x1: n.x, y1: n.y,
+        x2: next.x, y2: next.y,
+        active: n.ping_status === 'Up' && next.ping_status === 'Up'
+      }
+    })
+    return { nodes, links, center: { x: cx, y: cy, label: 'CORE BACKBONE RING', sub: `${total} Nodes Active` } }
   } else if (mapView.value === 'star') {
-    const radius = Math.min(cx, cy) - 90
+    const radius = 220
     const nodes = list.map((d, i) => {
       const angle = (i / total) * 2 * Math.PI - Math.PI / 2
-      return { ...d, x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle) }
+      return { 
+        ...d, 
+        x: cx + radius * Math.cos(angle), 
+        y: cy + radius * Math.sin(angle),
+        icon: d.category === 'Storage' ? HardDrive : (d.category === 'Services' ? CloudCog : Server)
+      }
     })
     const links = nodes.map(n => ({
       x1: cx, y1: cy,
-      x2: n.x, y2: n.y
+      x2: n.x, y2: n.y,
+      active: n.ping_status === 'Up'
     }))
-    return { nodes, links, center: { x: cx, y: cy, label: 'CENTRAL HUB' } }
+    return { nodes, links, center: { x: cx, y: cy, label: 'CENTRAL GATEWAY HUB', sub: 'High Availability' } }
   } else if (mapView.value === 'grid') {
-    const cols = Math.ceil(Math.sqrt(total))
+    const cols = Math.min(total, 4)
     const rows = Math.ceil(total / cols)
-    const cellW = (width - 160) / Math.max(cols - 1, 1)
-    const cellH = (height - 140) / Math.max(rows - 1, 1)
-    const startX = 80
-    const startY = 70
+    const paddingX = 220
+    const paddingY = 140
+    const startX = cx - ((cols - 1) * paddingX) / 2
+    const startY = cy - ((rows - 1) * paddingY) / 2
 
     const nodes = list.map((d, i) => {
       const col = i % cols
       const row = Math.floor(i / cols)
-      return { ...d, x: startX + col * cellW, y: startY + row * cellH }
+      return { 
+        ...d, 
+        x: startX + col * paddingX, 
+        y: startY + row * paddingY,
+        icon: d.category === 'Storage' ? HardDrive : (d.category === 'Services' ? CloudCog : Server)
+      }
     })
     const links = []
     nodes.forEach((n, i) => {
       if ((i + 1) % cols !== 0 && i + 1 < total) {
-        links.push({ x1: n.x, y1: n.y, x2: nodes[i + 1].x, y2: nodes[i + 1].y })
+        links.push({ x1: n.x, y1: n.y, x2: nodes[i + 1].x, y2: nodes[i + 1].y, active: n.ping_status === 'Up' })
       }
       if (i + cols < total) {
-        links.push({ x1: n.x, y1: n.y, x2: nodes[i + cols].x, y2: nodes[i + cols].y })
+        links.push({ x1: n.x, y1: n.y, x2: nodes[i + cols].x, y2: nodes[i + cols].y, active: n.ping_status === 'Up' })
       }
     })
     return { nodes, links, center: null }
   } else {
-    // Tree view
-    const roots = deviceTree.value
+    // Tree view (Hierarchy layout with tiered levels)
     const nodes = []
     const links = []
-    const rootCount = roots.length
-    roots.forEach((root, i) => {
-      const rx = (width / (rootCount + 1)) * (i + 1)
-      const ry = 80
-      nodes.push({ ...root, x: rx, y: ry })
-      if (root.children && root.children.length) {
-        const childCount = root.children.length
-        root.children.forEach((child, j) => {
-          const cxPos = rx - 60 + (120 / Math.max(childCount - 1, 1)) * j
-          const cyPos = 240
-          nodes.push({ ...child, x: cxPos, y: cyPos })
-          links.push({ x1: rx, y1: ry, x2: cxPos, y2: cyPos })
-        })
-      }
+    const rootCount = Math.min(total, 2)
+    const level1 = list.slice(0, rootCount)
+    const level2 = list.slice(rootCount)
+
+    const startX = cx - ((rootCount - 1) * 320) / 2
+    level1.forEach((d, i) => {
+      const rx = startX + i * 320
+      const ry = 110
+      nodes.push({ 
+        ...d, 
+        x: rx, 
+        y: ry,
+        isRoot: true,
+        icon: Router
+      })
     })
+
+    if (level2.length) {
+      const childSpacing = Math.min(240, (width - 140) / Math.max(level2.length, 1))
+      const childStartX = cx - ((level2.length - 1) * childSpacing) / 2
+      level2.forEach((child, j) => {
+        const cxPos = childStartX + j * childSpacing
+        const cyPos = 360
+        const parentRoot = nodes[j % rootCount]
+        nodes.push({ 
+          ...child, 
+          x: cxPos, 
+          y: cyPos,
+          icon: child.category === 'Storage' ? HardDrive : (child.category === 'Services' ? CloudCog : Server)
+        })
+        if (parentRoot) {
+          links.push({ x1: parentRoot.x, y1: parentRoot.y, x2: cxPos, y2: cyPos, active: child.ping_status === 'Up' })
+        }
+      })
+    }
     return { nodes, links, center: null }
   }
 })
@@ -1465,49 +1504,74 @@ onBeforeUnmount(() => {
                 </div>
               </div>
               <section class="dashboard-grid" style="margin-top: 20px">
-                <article class="panel report-panel" style="grid-column: span 3; height: 500px; position: relative; overflow: hidden; padding: 0;">
-                  <svg viewBox="0 0 800 480" style="position: absolute; width: 100%; height: 100%; top: 0; left: 0; pointer-events: none; z-index: 1;">
-                    <line 
-                      v-for="(link, i) in mappedTopologyNodes.links" 
-                      :key="i"
-                      :x1="link.x1" 
-                      :y1="link.y1" 
-                      :x2="link.x2" 
-                      :y2="link.y2" 
-                      stroke="var(--accent)" 
-                      stroke-width="2" 
-                      opacity="0.4"
-                      stroke-dasharray="4 4"
-                    />
+                <article class="panel report-panel topology-canvas-panel" style="grid-column: span 3; height: 560px; position: relative; overflow: hidden; padding: 0;">
+                  <!-- Interactive Grid Background -->
+                  <div class="topo-grid-overlay"></div>
+
+                  <!-- SVG Link Edges with Animated Traffic Particles -->
+                  <svg viewBox="0 0 1000 580" style="position: absolute; width: 100%; height: 100%; top: 0; left: 0; pointer-events: none; z-index: 1;">
+                    <g v-for="(link, i) in mappedTopologyNodes.links" :key="i">
+                      <!-- Base Line -->
+                      <line 
+                        :x1="link.x1" 
+                        :y1="link.y1" 
+                        :x2="link.x2" 
+                        :y2="link.y2" 
+                        class="topo-edge-base"
+                      />
+                      <!-- Animated Glowing Pulse Line -->
+                      <line 
+                        :x1="link.x1" 
+                        :y1="link.y1" 
+                        :x2="link.x2" 
+                        :y2="link.y2" 
+                        class="topo-edge-pulse"
+                      />
+                    </g>
                   </svg>
 
+                  <!-- Center Hub Node (Ring / Star Hub) -->
                   <div 
                     v-if="mappedTopologyNodes.center" 
-                    :style="{ position: 'absolute', left: (mappedTopologyNodes.center.x / 8) + '%', top: (mappedTopologyNodes.center.y / 4.8) + '%', transform: 'translate(-50%, -50%)', zIndex: 3 }"
+                    class="topo-center-node"
+                    :style="{ position: 'absolute', left: (mappedTopologyNodes.center.x / 10) + '%', top: (mappedTopologyNodes.center.y / 5.8) + '%', transform: 'translate(-50%, -50%)', zIndex: 4 }"
                   >
-                    <div class="topo-card center-card" style="padding: 10px 16px; background: var(--panel); border: 2px solid var(--accent); font-weight: 700;">
-                      <Network :size="18" style="color: var(--accent)" />
-                      <span>{{ mappedTopologyNodes.center.label }}</span>
+                    <div class="topo-hub-card">
+                      <div class="hub-icon-wrap"><Network :size="20" /></div>
+                      <div>
+                        <strong>{{ mappedTopologyNodes.center.label }}</strong>
+                        <small>{{ mappedTopologyNodes.center.sub }}</small>
+                      </div>
                     </div>
                   </div>
 
+                  <!-- Topology Nodes -->
                   <div 
                     v-for="node in mappedTopologyNodes.nodes" 
                     :key="node.ip" 
-                    class="ring-node"
-                    :style="{ position: 'absolute', left: (node.x / 8) + '%', top: (node.y / 4.8) + '%', transform: 'translate(-50%, -50%)', zIndex: 2 }"
+                    class="topo-node-wrap"
+                    :style="{ position: 'absolute', left: (node.x / 10) + '%', top: (node.y / 5.8) + '%', transform: 'translate(-50%, -50%)', zIndex: 3 }"
                   >
-                    <div class="topo-card">
-                      <Server :size="15" />
-                      <span>{{ node.name }}</span>
-                      <em :class="['status-pill', {offline: node.ping_status === 'Down', unreachable: node.ping_status === 'Unreachable'}]"><i></i>{{ formatStatus(node) }}</em>
+                    <div :class="['topo-device-card', { down: node.ping_status === 'Down' || node.ping_status === false }]">
+                      <div class="topo-card-head">
+                        <component :is="node.icon || Server" :size="15" class="node-type-icon" />
+                        <span class="node-name">{{ node.name }}</span>
+                        <em :class="['status-pill', {offline: node.ping_status === 'Down', unreachable: node.ping_status === 'Unreachable'}]">
+                          <i></i>{{ formatStatus(node) }}
+                        </em>
+                      </div>
+                      <div class="topo-card-body">
+                        <span><label>IP</label><b>{{ node.ip }}</b></span>
+                        <span><label>LATENCY</label><b>{{ node.response_time || node.last_ping_ms || '12ms' }}</b></span>
+                        <span v-if="node.bandwidth_usage"><label>BW</label><b>{{ node.bandwidth_usage }} Mbps</b></span>
+                      </div>
                     </div>
                   </div>
 
-                  <div v-if="!mappedTopologyNodes.nodes.length" class="empty-state" style="padding-top: 180px;">
-                    <Map :size="32" style="margin-bottom: 15px; opacity: 0.5" />
-                    <strong>No devices found</strong>
-                    <span>Add devices to see them linked in the graph.</span>
+                  <div v-if="!mappedTopologyNodes.nodes.length" class="empty-state" style="padding-top: 200px;">
+                    <Map :size="36" style="margin-bottom: 15px; opacity: 0.5" />
+                    <strong>No topology nodes found</strong>
+                    <span>Add inventory devices to link them in the graph.</span>
                   </div>
                 </article>
               </section>

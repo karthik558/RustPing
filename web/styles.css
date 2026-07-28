@@ -417,18 +417,161 @@ input[type="checkbox"]{accent-color:var(--lime);cursor:pointer}
 .setting-item label { color: #889289; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
 .setting-item input[type="number"], .setting-item select { padding: 8px 12px; border-radius: 6px; background: rgba(0,0,0,0.2); border: 1px solid var(--border); color: var(--text); outline: none; width: 140px; }
 
-/* Topology Map */
-.topology-container { display: flex; flex-direction: column; gap: 20px; margin-top: 20px; padding: 20px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: auto; min-height: 400px; }
-.theme-light .topology-container { background: #fbfcf7; border-color: #d1d6ce; }
-.topo-node { position: relative; }
-.topo-card { display: inline-flex; align-items: center; gap: 8px; padding: 10px 15px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; font-weight: 500; font-size: 13px; position: relative; z-index: 2; }
-.theme-light .topo-card { background: #ffffff; border-color: #bfc5ba; color: #171d17; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
-.topo-card em { font-size: 10px; padding: 2px 6px; border-radius: 4px; font-style: normal; }
-.topo-children { padding-left: 40px; border-left: 2px solid var(--border); margin-left: 10px; margin-top: 10px; }
-.theme-light .topo-children { border-color: #d1d6ce; }
-.topo-children .topo-node { margin-bottom: 10px; }
-.topo-children .topo-node::before { content: ''; position: absolute; left: -30px; top: 18px; width: 30px; border-top: 2px solid var(--border); }
-.theme-light .topo-children .topo-node::before { border-color: #d1d6ce; }
+/* Topology Map Premium Redesign */
+.topology-canvas-panel {
+  background: radial-gradient(circle at 50% 50%, rgba(207, 255, 51, 0.03), transparent 70%), #090c0a !important;
+  border: 1px solid var(--line) !important;
+}
+.theme-light .topology-canvas-panel {
+  background: radial-gradient(circle at 50% 50%, rgba(46, 68, 0, 0.04), transparent 70%), #ffffff !important;
+  border-color: #d0d7cc !important;
+}
+.topo-grid-overlay {
+  position: absolute;
+  inset: 0;
+  background-size: 30px 30px;
+  background-image: linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                    linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  pointer-events: none;
+}
+.theme-light .topo-grid-overlay {
+  background-image: linear-gradient(to right, rgba(0, 0, 0, 0.04) 1px, transparent 1px),
+                    linear-gradient(to bottom, rgba(0, 0, 0, 0.04) 1px, transparent 1px);
+}
+.topo-edge-base {
+  stroke: var(--line);
+  stroke-width: 2px;
+  opacity: 0.35;
+}
+.topo-edge-pulse {
+  stroke: var(--lime);
+  stroke-width: 2.5px;
+  stroke-dasharray: 6 12;
+  animation: topoDash 1.4s linear infinite;
+  opacity: 0.85;
+}
+.theme-light .topo-edge-pulse {
+  stroke: #2e4400;
+}
+@keyframes topoDash {
+  to {
+    stroke-dashoffset: -36;
+  }
+}
+.topo-hub-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  background: rgba(14, 18, 15, 0.95);
+  border: 2px solid var(--lime);
+  box-shadow: 0 0 25px rgba(207, 255, 51, 0.25);
+  border-radius: 4px;
+}
+.theme-light .topo-hub-card {
+  background: #ffffff;
+  border-color: #2e4400;
+  box-shadow: 0 4px 20px rgba(46, 68, 0, 0.15);
+  color: #111611;
+}
+.hub-icon-wrap {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  background: var(--lime);
+  color: #0b0e0a;
+}
+.theme-light .hub-icon-wrap {
+  background: #2e4400;
+  color: #ffffff;
+}
+.topo-hub-card strong {
+  display: block;
+  font-size: 11px;
+  font-family: "DM Mono", monospace;
+  letter-spacing: 0.08em;
+}
+.topo-hub-card small {
+  display: block;
+  font-size: 9px;
+  color: var(--muted);
+}
+.topo-device-card {
+  min-width: 175px;
+  background: rgba(13, 17, 14, 0.92);
+  border: 1px solid var(--line);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+  border-radius: 4px;
+  padding: 10px 14px;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  cursor: pointer;
+}
+.topo-device-card:hover {
+  transform: translateY(-3px) scale(1.03);
+  border-color: var(--lime);
+  box-shadow: 0 0 20px rgba(207, 255, 51, 0.2);
+}
+.theme-light .topo-device-card {
+  background: #ffffff;
+  border-color: #d0d7cc;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.06);
+  color: #111611;
+}
+.theme-light .topo-device-card:hover {
+  border-color: #2e4400;
+  box-shadow: 0 6px 20px rgba(46, 68, 0, 0.15);
+}
+.topo-device-card.down {
+  border-color: var(--danger) !important;
+  box-shadow: 0 0 18px rgba(255, 103, 95, 0.25) !important;
+}
+.topo-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.node-type-icon {
+  color: var(--lime);
+}
+.theme-light .node-type-icon {
+  color: #2e4400;
+}
+.node-name {
+  font-size: 11px;
+  font-weight: 600;
+  flex: 1;
+}
+.topo-card-body {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 8px;
+  font-size: 8px;
+  font-family: "DM Mono", monospace;
+  color: var(--muted);
+}
+.topo-card-body span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.topo-card-body label {
+  font-size: 7px;
+  color: #5d665e;
+}
+.theme-light .topo-card-body label {
+  color: #788279;
+}
+.topo-card-body b {
+  color: var(--text);
+  font-weight: 500;
+}
+.theme-light .topo-card-body b {
+  color: #111611;
+}
 
 /* Reports Charts */
 .report-panel { padding: 22px; min-height: 260px; overflow: hidden; }
