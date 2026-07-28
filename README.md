@@ -1,11 +1,25 @@
 # RustPing — Enterprise Network & Infrastructure Monitoring Console
 
-[![Live Demo](https://img.shields.io/badge/Live_Demo-rustping.samsproject.in-007acc?style=for-the-badge&logo=nginx)](https://rustping.samsproject.in/)
-[![Rust](https://img.shields.io/badge/Rust-1.70+-orange.svg?style=for-the-badge&logo=rust)](https://www.rust-lang.org/)
-[![Rocket](https://img.shields.io/badge/Rocket-0.5.1-red.svg?style=for-the-badge&logo=rocket)](https://rocket.rs/)
-[![Vue.js](https://img.shields.io/badge/Vue.js-3.5-4FC08D.svg?style=for-the-badge&logo=vuedotjs)](https://vuejs.org/)
-[![SQLite](https://img.shields.io/badge/SQLite-3-003B57.svg?style=for-the-badge&logo=sqlite)](https://www.sqlite.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
+<p align="center">
+  <a href="https://rustping.samsproject.in/">
+    <img src="https://img.shields.io/badge/Live%20Demo-rustping.samsproject.in-007acc?style=flat&logo=nginx&logoColor=white" alt="Live Demo" />
+  </a>
+  <a href="https://www.rust-lang.org/">
+    <img src="https://img.shields.io/badge/Rust-1.70+-000000?style=flat&logo=rust&logoColor=white" alt="Rust" />
+  </a>
+  <a href="https://rocket.rs/">
+    <img src="https://img.shields.io/badge/Rocket-0.5.1-E83E8C?style=flat&logo=rocket&logoColor=white" alt="Rocket" />
+  </a>
+  <a href="https://vuejs.org/">
+    <img src="https://img.shields.io/badge/Vue.js-3.5-4FC08D?style=flat&logo=vuedotjs&logoColor=white" alt="Vue.js" />
+  </a>
+  <a href="https://www.sqlite.org/">
+    <img src="https://img.shields.io/badge/SQLite-3-003B57?style=flat&logo=sqlite&logoColor=white" alt="SQLite" />
+  </a>
+  <a href="https://opensource.org/licenses/MIT">
+    <img src="https://img.shields.io/badge/License-MIT-02569B?style=flat" alt="License: MIT" />
+  </a>
+</p>
 
 **RustPing** is a self-hosted, enterprise-grade network device monitoring and operations console built with **Rust (Rocket)** and **Vue 3**. It provides real-time infrastructure tracking across 19 sensor types, visual network topology mapping, SLA analytics, SMTP alerting, role-based access control, status pages, and a live diagnostic event stream — all in a single responsive web application with no cloud dependency.
 
