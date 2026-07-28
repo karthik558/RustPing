@@ -656,6 +656,345 @@ async fn send_test_email(_auth: Auth, email_service: &State<EmailService>) -> St
     }
 }
 
+/// GET /system_info — returns real OS-level hardware telemetry
+#[get("/system_info")]
+async fn get_system_info() -> Json<serde_json::Value> {
+    use tokio::process::Command;
+
+    // --- Hostname ---
+    let hostname = Command::new("hostname").output().await
+        .ok().and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_default().trim().to_string();
+
+    // --- OS Name & Version ---
+    let (os_name, os_version, os_type) = if cfg!(target_os = "macos") {
+        let name = Command::new("sw_vers").arg("-productName").output().await
+            .ok().and_then(|o| String::from_utf8(o.stdout).ok())
+            .unwrap_or("macOS".to_string()).trim().to_string();
+        let version = Command::new("sw_vers").arg("-productVersion").output().await
+            .ok().and_then(|o| String::from_utf8(o.stdout).ok())
+            .unwrap_or_default().trim().to_string();
+        (name, version, "macOS".to_string())
+    } else if cfg!(target_os = "linux") {
+        let mut name = "Linux".to_string();
+        let mut version = String::new();
+        if let Ok(content) = std::fs::read_to_string("/etc/os-release") {
+            for line in content.lines() {
+                if line.starts_with("PRETTY_NAME=") {
+                    name = line.trim_start_matches("PRETTY_NAME=").trim_matches('"').to_string();
+                }
+                if line.starts_with("VERSION_ID=") {
+                    version = line.trim_start_matches("VERSION_ID=").trim_matches('"').to_string();
+                }
+            }
+        }
+        (name, version, "Linux".to_string())
+    } else {
+        ("Windows".to_string(), "10+".to_string(), "Windows".to_string())
+    };
+
+    // --- CPU info ---
+    let (cpu_brand, cpu_cores, cpu_percent) = if cfg!(target_os = "macos") {
+        let brand = Command::new("sysctl").arg("-n").arg("machdep.cpu.brand_string").output().await
+            .ok().and_then(|o| String::from_utf8(o.stdout).ok())
+            .unwrap_or_default().trim().to_string();
+        let cores_str = Command::new("sysctl").arg("-n").arg("hw.logicalcpu").output().await
+            .ok().and_then(|o| String::from_utf8(o.stdout).ok())
+            .unwrap_or("4".to_string()).trim().to_string();
+        let cores: u32 = cores_str.parse().unwrap_or(4);
+        // macOS CPU usage via top
+        let usage_out = Command::new("sh").arg("-c")
+            .arg("top -l 1 -s 0 | grep 'CPU usage' | awk '{print $3}' | tr -d '%'")
+            .output().await;
+        let cpu_pct: f64 = usage_out.ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0.0);
+        (brand, cores, cpu_pct)
+    } else {
+        let brand = Command::new("sh").arg("-c")
+            .arg("grep 'model name' /proc/cpuinfo | head -1 | cut -d: -f2")
+            .output().await
+            .ok().and_then(|o| String::from_utf8(o.stdout).ok())
+            .unwrap_or_default().trim().to_string();
+        let cores_str = Command::new("nproc").output().await
+            .ok().and_then(|o| String::from_utf8(o.stdout).ok())
+            .unwrap_or("4".to_string()).trim().to_string();
+        let cores: u32 = cores_str.parse().unwrap_or(4);
+        let usage_out = Command::new("sh").arg("-c")
+            .arg("top -bn1 | grep 'Cpu(s)' | awk '{print $2}' | tr -d '%us,'")
+            .output().await;
+        let cpu_pct: f64 = usage_out.ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0.0);
+        (brand, cores, cpu_pct)
+    };
+
+    // --- RAM ---
+    let (ram_total_mb, ram_used_mb) = if cfg!(target_os = "macos") {
+        let total_bytes_str = Command::new("sysctl").arg("-n").arg("hw.memsize").output().await
+            .ok().and_then(|o| String::from_utf8(o.stdout).ok())
+            .unwrap_or("0".to_string()).trim().to_string();
+        let total_mb = total_bytes_str.parse::<u64>().unwrap_or(0) / 1024 / 1024;
+        // Get used via vm_stat
+        let vm_out = Command::new("vm_stat").output().await;
+        let used_mb = if let Ok(out) = vm_out {
+            let s = String::from_utf8_lossy(&out.stdout);
+            let mut pages_active: u64 = 0;
+            let mut pages_wired: u64 = 0;
+            let mut pages_compressed: u64 = 0;
+            for line in s.lines() {
+                if line.contains("Pages active") {
+                    pages_active = line.split(':').nth(1).and_then(|v| v.trim().trim_end_matches('.').parse().ok()).unwrap_or(0);
+                } else if line.contains("Pages wired down") {
+                    pages_wired = line.split(':').nth(1).and_then(|v| v.trim().trim_end_matches('.').parse().ok()).unwrap_or(0);
+                } else if line.contains("Pages occupied by compressor") {
+                    pages_compressed = line.split(':').nth(1).and_then(|v| v.trim().trim_end_matches('.').parse().ok()).unwrap_or(0);
+                }
+            }
+            (pages_active + pages_wired + pages_compressed) * 4096 / 1024 / 1024
+        } else { 0 };
+        (total_mb, used_mb)
+    } else {
+        let mem_out = Command::new("free").arg("-m").output().await;
+        let (total_mb, used_mb) = if let Ok(out) = mem_out {
+            let s = String::from_utf8_lossy(&out.stdout);
+            let mem_line = s.lines().nth(1).unwrap_or("");
+            let parts: Vec<&str> = mem_line.split_whitespace().collect();
+            let total = parts.get(1).and_then(|v| v.parse().ok()).unwrap_or(0u64);
+            let used = parts.get(2).and_then(|v| v.parse().ok()).unwrap_or(0u64);
+            (total, used)
+        } else { (8192, 4096) };
+        (total_mb, used_mb)
+    };
+
+    let ram_total_gb = (ram_total_mb as f64) / 1024.0;
+    let ram_used_gb = (ram_used_mb as f64) / 1024.0;
+    let ram_percent = if ram_total_mb > 0 { (ram_used_mb as f64 / ram_total_mb as f64 * 100.0).round() } else { 0.0 };
+
+    // --- Disk ---
+    let df_out = Command::new("df").arg("-H").output().await;
+    let mut disks: Vec<serde_json::Value> = vec![];
+    if let Ok(out) = df_out {
+        let s = String::from_utf8_lossy(&out.stdout);
+        for line in s.lines().skip(1) {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 6 {
+                let fs = parts[0];
+                let total = parts[1];
+                let used = parts[2];
+                let mount = parts[parts.len() - 1];
+                if fs.starts_with('/') || mount.starts_with('/') {
+                    let pct_str = parts.get(4).unwrap_or(&"0%").trim_end_matches('%');
+                    let pct: f64 = pct_str.parse().unwrap_or(0.0);
+                    disks.push(json!({
+                        "mount": mount,
+                        "label": format!("{} ({})", mount, fs.split('/').last().unwrap_or(fs)),
+                        "total": total,
+                        "used": used,
+                        "percent": pct
+                    }));
+                }
+            }
+        }
+    }
+
+    // --- Thermal (no sudo ever) ---
+    // macOS: try `osx-cpu-temp` (brew install osx-cpu-temp) or `istats` (gem install iStats), else N/A
+    // Linux: read /sys/class/thermal directly (no root needed)
+    let thermal_celsius: f64 = if cfg!(target_os = "macos") {
+        // Try `osx-cpu-temp` (requires: brew install osx-cpu-temp)
+        let osx_temp = Command::new("osx-cpu-temp").output().await;
+        if let Ok(out) = osx_temp {
+            let s = String::from_utf8_lossy(&out.stdout);
+            // Output is like "60.2°C" or "60.2 C"
+            s.trim().trim_end_matches('C').trim_end_matches('°').trim().parse().unwrap_or(0.0)
+        } else {
+            // Try `istats` (requires: sudo gem install iStats)
+            let istats = Command::new("sh").arg("-c")
+                .arg("istats cpu --no-graphs 2>/dev/null | grep 'CPU' | awk '{print $3}' | tr -d '°C'")
+                .output().await;
+            if let Ok(out) = istats {
+                let s = String::from_utf8_lossy(&out.stdout);
+                s.trim().parse().unwrap_or(0.0)
+            } else {
+                // No thermal tool available without root — return 0 (shown as N/A in UI)
+                0.0
+            }
+        }
+    } else {
+        // Linux: /sys/class/thermal is readable without root
+        Command::new("sh").arg("-c")
+            .arg("cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null")
+            .output().await
+            .ok().and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|s| s.trim().parse::<f64>().ok())
+            .map(|v| v / 1000.0)
+            .unwrap_or(0.0)
+    };
+    let thermal_status = if thermal_celsius == 0.0 { "N/A (install osx-cpu-temp)".to_string() }
+        else if thermal_celsius < 50.0 { "Optimal".to_string() }
+        else if thermal_celsius < 80.0 { "Warm".to_string() }
+        else { "Hot".to_string() };
+
+    // --- Network Interfaces ---
+    let mut ifaces: Vec<serde_json::Value> = vec![];
+    if cfg!(target_os = "macos") {
+        let if_out = Command::new("ifconfig").output().await;
+        if let Ok(out) = if_out {
+            let s = String::from_utf8_lossy(&out.stdout);
+            let mut current_if = String::new();
+            let mut current_ip = String::new();
+            let mut current_mac = String::new();
+            for line in s.lines() {
+                if !line.starts_with('\t') && !line.starts_with(' ') && line.contains(':') {
+                    if !current_if.is_empty() && (!current_ip.is_empty() || !current_mac.is_empty()) {
+                        ifaces.push(json!({"name": current_if, "ip": current_ip, "mac": current_mac, "speed": "—"}));
+                    }
+                    current_if = line.split(':').next().unwrap_or("").to_string();
+                    current_ip = String::new(); current_mac = String::new();
+                } else if line.trim_start().starts_with("inet ") && !line.contains("inet6") {
+                    current_ip = line.trim_start().trim_start_matches("inet ").split_whitespace().next().unwrap_or("").to_string();
+                } else if line.trim_start().starts_with("ether ") {
+                    current_mac = line.trim_start().trim_start_matches("ether ").trim().to_string();
+                }
+            }
+            if !current_if.is_empty() { ifaces.push(json!({"name": current_if, "ip": current_ip, "mac": current_mac, "speed": "—"})); }
+        }
+    } else {
+        let ip_out = Command::new("sh").arg("-c").arg("ip addr show 2>/dev/null | grep -E '^[0-9]+:|inet '").output().await;
+        if let Ok(out) = ip_out {
+            let s = String::from_utf8_lossy(&out.stdout);
+            let mut name = String::new();
+            for line in s.lines() {
+                if line.contains(": <") {
+                    name = line.split(':').nth(1).unwrap_or("").trim().to_string();
+                } else if line.trim().starts_with("inet ") {
+                    let ip = line.trim().trim_start_matches("inet ").split('/').next().unwrap_or("").to_string();
+                    ifaces.push(json!({"name": name.clone(), "ip": ip, "mac": "—", "speed": "—"}));
+                }
+            }
+        }
+    }
+    ifaces.dedup_by(|a, b| a["name"] == b["name"]);
+    let ifaces_filtered: Vec<_> = ifaces.into_iter().filter(|i| {
+        let ip = i["ip"].as_str().unwrap_or("");
+        !ip.is_empty()
+    }).collect();
+
+    // --- Uptime ---
+    let uptime_str = Command::new("uptime").output().await
+        .ok().and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_default().trim().to_string();
+
+    Json(json!({
+        "hostname": hostname,
+        "os_name": os_name,
+        "os_version": os_version,
+        "os_type": os_type,
+        "cpu_brand": cpu_brand,
+        "cpu_cores": cpu_cores,
+        "cpu_percent": (cpu_percent * 10.0).round() / 10.0,
+        "thermal_celsius": thermal_celsius,
+        "thermal_status": thermal_status,
+        "ram_total_gb": (ram_total_gb * 100.0).round() / 100.0,
+        "ram_used_gb": (ram_used_gb * 100.0).round() / 100.0,
+        "ram_percent": ram_percent,
+        "disks": disks,
+        "network_interfaces": ifaces_filtered,
+        "uptime": uptime_str
+    }))
+}
+
+/// GET /scan_network?subnet=192.168.1.0/24  — scans real local network
+#[get("/scan_network?<subnet>")]
+async fn scan_network(subnet: Option<&str>) -> Json<serde_json::Value> {
+    use tokio::process::Command;
+
+    let target_subnet = subnet.unwrap_or("192.168.1.0/24");
+    let mut found: Vec<serde_json::Value> = vec![];
+
+    // Parse subnet CIDR to get first 24 ips
+    let base_prefix = if let Some(slash) = target_subnet.find('/') {
+        let prefix = &target_subnet[..slash];
+        let parts: Vec<&str> = prefix.split('.').collect();
+        if parts.len() == 4 {
+            format!("{}.{}.{}.", parts[0], parts[1], parts[2])
+        } else { "192.168.1.".to_string() }
+    } else {
+        // Try to get current gateway subnet automatically
+        let gw_out = Command::new("sh").arg("-c")
+            .arg("route -n get default 2>/dev/null | grep gateway | awk '{print $2}'")
+            .output().await;
+        let gw = gw_out.ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .unwrap_or_default().trim().to_string();
+        if gw.is_empty() { "192.168.1.".to_string() }
+        else {
+            let parts: Vec<&str> = gw.split('.').collect();
+            format!("{}.{}.{}.", parts.get(0).unwrap_or(&"192"), parts.get(1).unwrap_or(&"168"), parts.get(2).unwrap_or(&"1"))
+        }
+    };
+
+    // Scan first 30 IPs concurrently via ping  
+    let scan_range: Vec<u8> = (1..=30).collect();
+    let mut handles = vec![];
+    for i in scan_range {
+        let ip = format!("{}{}", base_prefix, i);
+        handles.push(tokio::spawn(async move {
+            let out = tokio::time::timeout(
+                tokio::time::Duration::from_millis(800),
+                Command::new("ping").arg("-c").arg("1").arg("-t").arg("1").arg(&ip).output()
+            ).await;
+            if out.ok().and_then(|r| r.ok()).map(|o| o.status.success()).unwrap_or(false) {
+                // Resolve hostname
+                let host_out = tokio::time::timeout(
+                    tokio::time::Duration::from_secs(1),
+                    Command::new("host").arg(&ip).output()
+                ).await;
+                let hostname = host_out.ok()
+                    .and_then(|r| r.ok())
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .and_then(|s| {
+                        s.lines().next()
+                            .and_then(|l| l.split_whitespace().last())
+                            .map(|h| h.trim_end_matches('.').to_string())
+                    })
+                    .filter(|h| !h.is_empty() && h != "3(NXDOMAIN)")
+                    .unwrap_or_else(|| ip.clone());
+                Some((ip, hostname))
+            } else { None }
+        }));
+    }
+
+    for handle in handles {
+        if let Ok(Some((ip, hostname))) = handle.await {
+            // Detect open ports
+            let mut ports: Vec<String> = vec!["Ping".to_string()];
+            let common_ports: &[(u16, &str)] = &[(80, "HTTP/80"), (443, "HTTPS/443"), (22, "SSH/22"), (3306, "MySQL/3306"), (5432, "PostgreSQL/5432"), (27017, "MongoDB/27017")];
+            for (port, label) in common_ports {
+                let addr = format!("{}:{}", ip, port);
+                if tokio::time::timeout(
+                    tokio::time::Duration::from_millis(300),
+                    tokio::net::TcpStream::connect(&addr)
+                ).await.ok().and_then(|r| r.ok()).is_some() {
+                    ports.push(label.to_string());
+                }
+            }
+            found.push(json!({
+                "ip": ip,
+                "hostname": hostname,
+                "mac": "—",
+                "ports": ports,
+                "latency": "< 1ms"
+            }));
+        }
+    }
+
+    Json(json!({ "hosts": found, "total": found.len() }))
+}
+
 #[tokio::main]
 async fn main() {
     env_logger::init();
@@ -699,6 +1038,8 @@ async fn main() {
             render_public_status,
             get_maintenance_windows,
             create_maintenance_window,
+            get_system_info,
+            scan_network,
         ])
         .mount("/static", FileServer::from(relative!("static")))
         .register("/", catchers![unauthorized]);

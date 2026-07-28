@@ -63,53 +63,75 @@ const hoverTooltip = reactive({ visible: false, x: 0, y: 0, title: '', val: '', 
 // Auto Network Discovery State
 const scanningNetwork = ref(false)
 const scanSubnet = ref('192.168.1.0/24')
-const discoveredDevices = ref([
-  { ip: '192.168.1.1', mac: '00:11:32:8A:4F:10', hostname: 'gateway.internal', ports: ['Ping', 'Http', 'Port 80'], latency: '1.2 ms', added: false },
-  { ip: '192.168.1.10', mac: '00:11:32:8A:55:C1', hostname: 'nas-storage.local', ports: ['Ping', 'Database', 'DiskSpace'], latency: '2.4 ms', added: false },
-  { ip: '192.168.1.45', mac: 'A4:83:E7:91:B2:0C', hostname: 'workstation-main', ports: ['Ping', 'CpuLoad', 'DiskSpace'], latency: '0.8 ms', added: false },
-  { ip: '192.168.1.100', mac: '00:15:5D:01:14:02', hostname: 'prod-api-server', ports: ['Ping', 'Https', 'SslCert', 'WebSocket'], latency: '3.1 ms', added: false },
-  { ip: '192.168.1.200', mac: '00:15:5D:01:88:99', hostname: 'mail-gateway', ports: ['Ping', 'Smtp', 'Port 25'], latency: '4.2 ms', added: false }
-])
+const discoveredDevices = ref([])
 
-function runNetworkScan() {
+async function runNetworkScan() {
   scanningNetwork.value = true
-  flash('Scanning local subnet ' + scanSubnet.value + ' for active targets...')
-  setTimeout(() => {
+  discoveredDevices.value = []
+  flash('Scanning subnet ' + scanSubnet.value + ' for active targets...')
+  try {
+    const subnet = encodeURIComponent(scanSubnet.value)
+    const res = await fetch(`/scan_network?subnet=${subnet}`)
+    if (res.ok) {
+      const data = await res.json()
+      discoveredDevices.value = (data.hosts || []).map(h => ({...h, added: false}))
+      flash(`Network scan complete. ${discoveredDevices.value.length} active device${discoveredDevices.value.length !== 1 ? 's' : ''} discovered.`)
+    } else {
+      flash('Scan failed. Check subnet format and network access.')
+    }
+  } catch (e) {
+    flash('Scan error: ' + e.message)
+  } finally {
     scanningNetwork.value = false
-    flash('Network scan complete. 5 active devices discovered.')
-  }, 2200)
+  }
+}
+
+// Host System Telemetry State
+const systemTelemetry = reactive({
+  hostname: '—',
+  os_name: '—',
+  os_version: '—',
+  os_type: '—',
+  cpu_brand: '—',
+  cpu_percent: 0,
+  cpu_cores: 0,
+  thermal_celsius: 0,
+  thermal_status: 'N/A',
+  ram_used_gb: 0,
+  ram_total_gb: 0,
+  ram_percent: 0,
+  uptime: '—',
+  disks: [],
+  network_interfaces: []
+})
+
+async function loadSystemInfo() {
+  try {
+    const res = await fetch('/system_info')
+    if (res.ok) {
+      const data = await res.json()
+      Object.assign(systemTelemetry, data)
+    }
+  } catch (e) {
+    console.warn('System info not available:', e)
+  }
 }
 
 function importDiscoveredDevice(dev) {
   dev.added = true
   openAddDeviceModal()
-  deviceForm.name = dev.hostname
+  deviceForm.name = dev.hostname !== dev.ip ? dev.hostname : dev.ip
   deviceForm.ip = dev.ip
-  deviceForm.category = dev.hostname.includes('nas') ? 'Storage' : dev.hostname.includes('api') ? 'Services' : 'Network'
-  deviceForm.sensors = dev.ports.map(p => p.split(' ')[0]).filter(p => ['Ping','Http','Https','Port','Snmp','SslCert','Dns','Database','Ssh','Smtp','Ntp','Ftp','Jitter','HttpLatency','PacketLoss','CpuLoad','DiskSpace','WebSocket'].includes(p))
+  const hn = (dev.hostname || '').toLowerCase()
+  deviceForm.category = hn.includes('nas') || hn.includes('storage') ? 'Storage'
+    : hn.includes('api') || hn.includes('web') ? 'Services'
+    : hn.includes('db') || hn.includes('sql') || hn.includes('mongo') ? 'Database'
+    : hn.includes('router') || hn.includes('gateway') || hn.includes('gw') ? 'Network'
+    : 'Network'
+  const knownSensors = ['Ping','Http','Https','Port','Snmp','SslCert','Dns','Database','Ssh','Smtp','Ntp','Ftp','Jitter','HttpLatency','PacketLoss','CpuLoad','DiskSpace','WebSocket']
+  deviceForm.sensors = (dev.ports || []).map(p => p.split('/')[0]).filter(p => knownSensors.includes(p))
   if (!deviceForm.sensors.length) deviceForm.sensors = ['Ping']
 }
-
-// Host System Telemetry State
-const systemTelemetry = reactive({
-  cpu_percent: 28.4,
-  cpu_cores: 8,
-  thermal_celsius: 41.5,
-  thermal_status: 'Optimal',
-  ram_used_gb: 7.8,
-  ram_total_gb: 16.0,
-  swap_used_gb: 1.2,
-  swap_total_gb: 4.0,
-  disks: [
-    { mount: '/', label: 'System Root NVMe (OS)', used_gb: 327.8, total_gb: 512.0, percent: 64.0 },
-    { mount: '/var/log', label: 'Telemetry Audit Stream', used_gb: 57.2, total_gb: 100.0, percent: 57.2 },
-    { mount: '/data', label: 'Secondary Data Partition', used_gb: 800.0, total_gb: 2000.0, percent: 40.0 }
-  ],
-  network_interfaces: [
-    { name: 'eth0', ip: '192.168.1.45', mac: 'A4:83:E7:91:B2:0C', speed: '1000 Mbps', rx_mb: 38192, tx_mb: 14892 },
-    { name: 'lo', ip: '127.0.0.1', mac: '00:00:00:00:00:00', speed: 'Loopback', rx_mb: 4102, tx_mb: 4102 }
-  ]
-})
 
 function showGraphHover(e, title, val, sub) {
   const rect = e.currentTarget.getBoundingClientRect()
@@ -871,6 +893,7 @@ onMounted(() => {
   handleHash()
   if (isAuthenticated.value) {
     loadDevices()
+    loadSystemInfo()
     resetInactivityTimer()
   }
   refreshTimer = window.setInterval(() => isApp.value && isAuthenticated.value && refreshData(), userSettings.refreshRate)
@@ -1228,21 +1251,33 @@ onBeforeUnmount(() => {
                 <div><small>HOST HARDWARE TELEMETRY</small><h1>Host System & Telemetry</h1><p>Real-time CPU thermal state, memory utilization, and disk filesystem partitions.</p></div>
                 <button class="outline-button compact" @click="refreshData"><RefreshCw :size="14" /> Refresh Host</button>
               </div>
-
-              <section class="metric-grid">
-                <article><div><small>CPU LOAD</small><strong>{{ systemTelemetry.cpu_percent }}<sup>%</sup></strong></div><span><Cpu :size="19" /></span><p><b>{{ systemTelemetry.cpu_cores }} Cores</b> Active Load</p></article>
-                <article><div><small>THERMAL STATE</small><strong>{{ systemTelemetry.thermal_celsius }}<sup>°C</sup></strong></div><span><Thermometer :size="19" /></span><p>Status: <b>{{ systemTelemetry.thermal_status }}</b></p></article>
-                <article><div><small>MEMORY (RAM)</small><strong>{{ systemTelemetry.ram_used_gb }} <sup>GB</sup></strong></div><span><Activity :size="19" /></span><p>Of <b>{{ systemTelemetry.ram_total_gb }} GB</b> (51.2% used)</p></article>
-                <article><div><small>PRIMARY STORAGE</small><strong>184<sup>GB</sup></strong></div><span><HardDrive :size="19" /></span><p>Free on <b>/ (NVMe Root)</b></p></article>
+              <!-- OS Identity Row -->
+              <section class="dashboard-grid" style="margin-top:0;margin-bottom:20px">
+                <article class="panel" style="grid-column: span 3; padding: 20px 24px">
+                  <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:24px;align-items:start">
+                    <div><small style="color:var(--lime);font:8px 'DM Mono',monospace;display:block;margin-bottom:6px">HOSTNAME</small><strong style="font-size:16px">{{ systemTelemetry.hostname }}</strong></div>
+                    <div><small style="color:var(--lime);font:8px 'DM Mono',monospace;display:block;margin-bottom:6px">OPERATING SYSTEM</small><strong style="font-size:14px">{{ systemTelemetry.os_name }}</strong><div style="font-size:10px;color:#7e877f;margin-top:3px">{{ systemTelemetry.os_type }} · {{ systemTelemetry.os_version }}</div></div>
+                    <div><small style="color:var(--lime);font:8px 'DM Mono',monospace;display:block;margin-bottom:6px">PROCESSOR</small><strong style="font-size:11px;word-break:break-word">{{ systemTelemetry.cpu_brand }}</strong></div>
+                    <div><small style="color:var(--lime);font:8px 'DM Mono',monospace;display:block;margin-bottom:6px">SYSTEM UPTIME</small><strong style="font-size:11px">{{ systemTelemetry.uptime || '—' }}</strong></div>
+                  </div>
+                </article>
               </section>
 
-              <section class="dashboard-grid">
+              <section class="metric-grid">
+                <article><div><small>CPU LOAD</small><strong>{{ systemTelemetry.cpu_percent }}<sup>%</sup></strong></div><span><Cpu :size="19" /></span><p><b>{{ systemTelemetry.cpu_cores }} Cores</b> · Active Load</p></article>
+                <article><div><small>THERMAL STATE</small><strong>{{ systemTelemetry.thermal_celsius > 0 ? systemTelemetry.thermal_celsius : '—' }}<sup v-if="systemTelemetry.thermal_celsius > 0">°C</sup></strong></div><span><Thermometer :size="19" /></span><p>Status: <b>{{ systemTelemetry.thermal_status }}</b></p></article>
+                <article><div><small>MEMORY (RAM)</small><strong>{{ systemTelemetry.ram_used_gb.toFixed(1) }} <sup>GB used</sup></strong></div><span><Activity :size="19" /></span><p>Of <b>{{ systemTelemetry.ram_total_gb.toFixed(1) }} GB</b> ({{ systemTelemetry.ram_percent }}% used)</p></article>
+                <article v-if="systemTelemetry.disks && systemTelemetry.disks[0]"><div><small>PRIMARY DISK</small><strong>{{ systemTelemetry.disks[0].used }}<sup> used</sup></strong></div><span><HardDrive :size="19" /></span><p>of <b>{{ systemTelemetry.disks[0].total }}</b> on <b>{{ systemTelemetry.disks[0].mount }}</b></p></article>
+              </section>
+
+              <section class="dashboard-grid" style="margin-top:20px">
                 <article class="panel throughput-panel">
-                  <div class="panel-title"><div><small>STORAGE PARTITIONS</small><h2>Filesystems & Disk Volumes</h2></div><span>LOCAL AGENT</span></div>
+                  <div class="panel-title"><div><small>STORAGE PARTITIONS</small><h2>Filesystems &amp; Disk Volumes</h2></div><span>LOCAL AGENT</span></div>
                   <div class="category-list" style="margin-top:20px">
-                    <div v-for="disk in systemTelemetry.disks" :key="disk.mount">
-                      <div class="cat-label"><strong>{{ disk.label }} ({{ disk.mount }})</strong><b>{{ disk.used_gb }} GB / {{ disk.total_gb }} GB</b></div>
-                      <div class="cat-bar"><i :style="{width: `${disk.percent}%`}"></i></div>
+                    <div v-if="!systemTelemetry.disks || !systemTelemetry.disks.length" style="padding:20px;color:#5f675f;text-align:center">Loading disk data...</div>
+                    <div v-for="disk in systemTelemetry.disks" :key="disk.mount" style="padding: 12px 0">
+                      <div class="cat-label"><strong>{{ disk.mount }}</strong><b>{{ disk.used }} / {{ disk.total }} ({{ disk.percent }}%)</b></div>
+                      <div class="cat-bar"><i :style="{width: `${disk.percent}%`, background: disk.percent > 90 ? 'var(--danger)' : disk.percent > 70 ? '#f5a623' : 'var(--lime)'}"></i></div>
                     </div>
                   </div>
                 </article>
@@ -1250,9 +1285,10 @@ onBeforeUnmount(() => {
                 <article class="panel traffic-panel">
                   <div class="panel-title"><div><small>INTERFACES</small><h2>Network Adapters</h2></div><span>HW STATE</span></div>
                   <div class="device-list" style="margin-top:15px">
+                    <div v-if="!systemTelemetry.network_interfaces || !systemTelemetry.network_interfaces.length" style="padding:20px;color:#5f675f;text-align:center">Loading interface data...</div>
                     <div v-for="iface in systemTelemetry.network_interfaces" :key="iface.name">
                       <div class="device-icon"><Network :size="16" /></div>
-                      <div><strong>{{ iface.name }} ({{ iface.ip }})</strong><small>MAC: {{ iface.mac }} · Speed: {{ iface.speed }}</small></div>
+                      <div><strong>{{ iface.name }} · {{ iface.ip }}</strong><small>MAC: {{ iface.mac || '—' }}</small></div>
                       <span class="status-pill"><Check :size="12" /> Active</span>
                     </div>
                   </div>
