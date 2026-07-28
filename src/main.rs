@@ -60,6 +60,16 @@ struct DeviceStatus {
     ssl_status: Option<String>,
     dns_status: Option<String>,
     db_status: Option<String>,
+    ssh_status: Option<String>,
+    smtp_status: Option<String>,
+    ntp_status: Option<String>,
+    ftp_status: Option<String>,
+    jitter_status: Option<String>,
+    http_latency: Option<String>,
+    packet_loss: Option<String>,
+    cpu_load: Option<String>,
+    disk_space: Option<String>,
+    ws_status: Option<String>,
     last_update: DateTime<Local>,
     changed_at: DateTime<Local>,
 }
@@ -74,6 +84,16 @@ impl DeviceStatus {
             ssl_status: None,
             dns_status: None,
             db_status: None,
+            ssh_status: None,
+            smtp_status: None,
+            ntp_status: None,
+            ftp_status: None,
+            jitter_status: None,
+            http_latency: None,
+            packet_loss: None,
+            cpu_load: None,
+            disk_space: None,
+            ws_status: None,
             last_update: now,
             changed_at: now,
         }
@@ -334,15 +354,25 @@ impl From<WebDevice> for ModelDevice {
             category: web_device.category,
             sensors: web_device.sensors.iter()
                 .map(|s| match s.as_str() {
-                    "Ping" => SensorType::Ping,
-                    "Http" => SensorType::Http,
-                    "Https" => SensorType::Https,
-                    "Bandwidth" => SensorType::Bandwidth,
-                    "Port" => SensorType::Port,
-                    "Snmp" => SensorType::Snmp,
-                    "SslCert" => SensorType::SslCert,
-                    "Dns" => SensorType::Dns,
-                    "Database" => SensorType::Database,
+                    "Ping"        => SensorType::Ping,
+                    "Http"        => SensorType::Http,
+                    "Https"       => SensorType::Https,
+                    "Bandwidth"   => SensorType::Bandwidth,
+                    "Port"        => SensorType::Port,
+                    "Snmp"        => SensorType::Snmp,
+                    "SslCert"     => SensorType::SslCert,
+                    "Dns"         => SensorType::Dns,
+                    "Database"    => SensorType::Database,
+                    "Ssh"         => SensorType::Ssh,
+                    "Smtp"        => SensorType::Smtp,
+                    "Ntp"         => SensorType::Ntp,
+                    "Ftp"         => SensorType::Ftp,
+                    "Jitter"      => SensorType::Jitter,
+                    "HttpLatency" => SensorType::HttpLatency,
+                    "PacketLoss"  => SensorType::PacketLoss,
+                    "CpuLoad"     => SensorType::CpuLoad,
+                    "DiskSpace"   => SensorType::DiskSpace,
+                    "WebSocket"   => SensorType::WebSocket,
                     _ => SensorType::Ping
                 })
                 .collect(),
@@ -356,6 +386,16 @@ impl From<WebDevice> for ModelDevice {
             ssl_status: None,
             dns_status: None,
             db_status: None,
+            ssh_status: None,
+            smtp_status: None,
+            ntp_status: None,
+            ftp_status: None,
+            jitter_status: None,
+            http_latency: None,
+            packet_loss: None,
+            cpu_load: None,
+            disk_space: None,
+            ws_status: None,
         }
     }
 }
@@ -1076,7 +1116,7 @@ async fn main() {
                         if let Some(parent) = &dev.parent_device {
                             if let Some(status) = parent_statuses.get(parent) {
                                 if status == "Down" || status == "Unreachable" {
-                                    return (dev, "Unreachable".to_string(), Some("Unreachable".to_string()), None, None, None, None);
+                                    return (dev, "Unreachable".to_string(), Some("Unreachable".to_string()), None, None, None, None, None, None, None, None, None, None, None, None, None, None);
                                 }
                             }
                         }
@@ -1205,13 +1245,25 @@ async fn main() {
                             debug!("WebSocket check for {}: {}", dev.name, res);
                         }
 
-                        (dev, ping_result_str, http_status, bandwidth_usage, ssl_status, dns_status, db_status)
+                        // Add all new results to tuple
+                        let ssh_status = if dev.sensors.contains(&SensorType::Ssh) { Some(monitor_ssh(&dev.ip, dev.port.unwrap_or(22)).await) } else { None };
+                        let smtp_status = if dev.sensors.contains(&SensorType::Smtp) { Some(monitor_smtp(&dev.ip, dev.port.unwrap_or(25)).await) } else { None };
+                        let ntp_status = if dev.sensors.contains(&SensorType::Ntp) { Some(monitor_ntp(&dev.ip).await) } else { None };
+                        let ftp_status = if dev.sensors.contains(&SensorType::Ftp) { Some(monitor_ftp(&dev.ip, dev.port.unwrap_or(21)).await) } else { None };
+                        let jitter_status = if dev.sensors.contains(&SensorType::Jitter) { Some(monitor_jitter(&dev.ip).await) } else { None };
+                        let http_latency = if dev.sensors.contains(&SensorType::HttpLatency) { Some(monitor_http_latency(dev.http_path.as_deref().unwrap_or(&dev.ip)).await) } else { None };
+                        let packet_loss = if dev.sensors.contains(&SensorType::PacketLoss) { Some(monitor_packet_loss(&dev.ip).await) } else { None };
+                        let cpu_load = if dev.sensors.contains(&SensorType::CpuLoad) { Some(monitor_cpu_load(&dev.ip).await) } else { None };
+                        let disk_space = if dev.sensors.contains(&SensorType::DiskSpace) { Some(monitor_disk_space(&dev.ip).await) } else { None };
+                        let ws_status = if dev.sensors.contains(&SensorType::WebSocket) { Some(monitor_websocket(dev.http_path.as_deref().unwrap_or(&dev.ip)).await) } else { None };
+
+                        (dev, ping_result_str, http_status, bandwidth_usage, ssl_status, dns_status, db_status, ssh_status, smtp_status, ntp_status, ftp_status, jitter_status, http_latency, packet_loss, cpu_load, disk_space, ws_status)
                     }
                 })
             ).await;
 
             let mut devices_locked = devices_clone.lock().await;
-            for (dev, ping_result, http_status, bandwidth_usage, ssl_status, dns_status, db_status) in check_results {
+            for (dev, ping_result, http_status, bandwidth_usage, ssl_status, dns_status, db_status, ssh_status, smtp_status, ntp_status, ftp_status, jitter_status, http_latency, packet_loss, cpu_load, disk_space, ws_status) in check_results {
                 let status = device_statuses.entry(dev.ip.clone()).or_insert_with(DeviceStatus::new);
                 
                 if status.update_ping(ping_result.clone()) {
@@ -1228,6 +1280,16 @@ async fn main() {
                     device.ssl_status = ssl_status.clone();
                     device.dns_status = dns_status.clone();
                     device.db_status = db_status.clone();
+                    device.ssh_status = ssh_status.clone();
+                    device.smtp_status = smtp_status.clone();
+                    device.ntp_status = ntp_status.clone();
+                    device.ftp_status = ftp_status.clone();
+                    device.jitter_status = jitter_status.clone();
+                    device.http_latency = http_latency.clone();
+                    device.packet_loss = packet_loss.clone();
+                    device.cpu_load = cpu_load.clone();
+                    device.disk_space = disk_space.clone();
+                    device.ws_status = ws_status.clone();
 
                     let _ = db_clone.update_device_statuses(
                         &device.name,
@@ -1237,6 +1299,16 @@ async fn main() {
                         ssl_status.as_deref(),
                         dns_status.as_deref(),
                         db_status.as_deref(),
+                        ssh_status.as_deref(),
+                        smtp_status.as_deref(),
+                        ntp_status.as_deref(),
+                        ftp_status.as_deref(),
+                        jitter_status.as_deref(),
+                        http_latency.as_deref(),
+                        packet_loss.as_deref(),
+                        cpu_load.as_deref(),
+                        disk_space.as_deref(),
+                        ws_status.as_deref(),
                     );
                 }
             }

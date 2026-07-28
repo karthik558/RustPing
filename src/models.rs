@@ -51,6 +51,26 @@ pub struct Device {
     pub dns_status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub db_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub smtp_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ntp_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ftp_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jitter_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http_latency: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub packet_loss: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_load: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disk_space: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ws_status: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]

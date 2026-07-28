@@ -76,6 +76,16 @@ impl Database {
                 ssl_status TEXT,
                 dns_status TEXT,
                 db_status TEXT,
+                ssh_status TEXT,
+                smtp_status TEXT,
+                ntp_status TEXT,
+                ftp_status TEXT,
+                jitter_status TEXT,
+                http_latency TEXT,
+                packet_loss TEXT,
+                cpu_load TEXT,
+                disk_space TEXT,
+                ws_status TEXT,
                 FOREIGN KEY (workspace_id) REFERENCES workspaces(id)
             );
 
@@ -125,6 +135,16 @@ impl Database {
         let _ = conn.execute("ALTER TABLE users ADD COLUMN username TEXT", []);
         let _ = conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT", []);
         let _ = conn.execute("ALTER TABLE users ADD COLUMN permissions TEXT", []);
+        let _ = conn.execute("ALTER TABLE devices ADD COLUMN ssh_status TEXT", []);
+        let _ = conn.execute("ALTER TABLE devices ADD COLUMN smtp_status TEXT", []);
+        let _ = conn.execute("ALTER TABLE devices ADD COLUMN ntp_status TEXT", []);
+        let _ = conn.execute("ALTER TABLE devices ADD COLUMN ftp_status TEXT", []);
+        let _ = conn.execute("ALTER TABLE devices ADD COLUMN jitter_status TEXT", []);
+        let _ = conn.execute("ALTER TABLE devices ADD COLUMN http_latency TEXT", []);
+        let _ = conn.execute("ALTER TABLE devices ADD COLUMN packet_loss TEXT", []);
+        let _ = conn.execute("ALTER TABLE devices ADD COLUMN cpu_load TEXT", []);
+        let _ = conn.execute("ALTER TABLE devices ADD COLUMN disk_space TEXT", []);
+        let _ = conn.execute("ALTER TABLE devices ADD COLUMN ws_status TEXT", []);
 
         info!("Database schema initialized successfully.");
         Ok(())
@@ -243,7 +263,7 @@ impl Database {
 
     pub fn get_devices(&self) -> Result<Vec<Device>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT id, name, ip, category, sensors, http_path, port, snmp_community, parent_device, ping_status, http_status, bandwidth_usage, ssl_status, dns_status, db_status FROM devices")?;
+        let mut stmt = conn.prepare("SELECT id, name, ip, category, sensors, http_path, port, snmp_community, parent_device, ping_status, http_status, bandwidth_usage, ssl_status, dns_status, db_status, ssh_status, smtp_status, ntp_status, ftp_status, jitter_status, http_latency, packet_loss, cpu_load, disk_space, ws_status FROM devices")?;
         
         let device_rows = stmt.query_map([], |row| {
             let id: String = row.get(0)?;
@@ -261,6 +281,16 @@ impl Database {
             let ssl_status: Option<String> = row.get(12)?;
             let dns_status: Option<String> = row.get(13)?;
             let db_status: Option<String> = row.get(14)?;
+            let ssh_status: Option<String> = row.get(15)?;
+            let smtp_status: Option<String> = row.get(16)?;
+            let ntp_status: Option<String> = row.get(17)?;
+            let ftp_status: Option<String> = row.get(18)?;
+            let jitter_status: Option<String> = row.get(19)?;
+            let http_latency: Option<String> = row.get(20)?;
+            let packet_loss: Option<String> = row.get(21)?;
+            let cpu_load: Option<String> = row.get(22)?;
+            let disk_space: Option<String> = row.get(23)?;
+            let ws_status: Option<String> = row.get(24)?;
 
             let sensors: Vec<SensorType> = serde_json::from_str(&sensors_raw).unwrap_or_else(|_| vec![SensorType::Ping]);
 
@@ -280,6 +310,16 @@ impl Database {
                 ssl_status,
                 dns_status,
                 db_status,
+                ssh_status,
+                smtp_status,
+                ntp_status,
+                ftp_status,
+                jitter_status,
+                http_latency,
+                packet_loss,
+                cpu_load,
+                disk_space,
+                ws_status,
             })
         })?;
 
@@ -315,11 +355,11 @@ impl Database {
         Ok(id)
     }
 
-    pub fn update_device_statuses(&self, name: &str, ping: Option<&str>, http: Option<&str>, bw: Option<f64>, ssl: Option<&str>, dns: Option<&str>, db: Option<&str>) -> Result<()> {
+    pub fn update_device_statuses(&self, name: &str, ping: Option<&str>, http: Option<&str>, bw: Option<f64>, ssl: Option<&str>, dns: Option<&str>, db: Option<&str>, ssh: Option<&str>, smtp: Option<&str>, ntp: Option<&str>, ftp: Option<&str>, jitter: Option<&str>, http_lat: Option<&str>, packet: Option<&str>, cpu: Option<&str>, disk: Option<&str>, ws: Option<&str>) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE devices SET ping_status=?1, http_status=?2, bandwidth_usage=?3, ssl_status=?4, dns_status=?5, db_status=?6 WHERE name=?7",
-            params![ping, http, bw, ssl, dns, db, name],
+            "UPDATE devices SET ping_status=?1, http_status=?2, bandwidth_usage=?3, ssl_status=?4, dns_status=?5, db_status=?6, ssh_status=?7, smtp_status=?8, ntp_status=?9, ftp_status=?10, jitter_status=?11, http_latency=?12, packet_loss=?13, cpu_load=?14, disk_space=?15, ws_status=?16 WHERE name=?17",
+            params![ping, http, bw, ssl, dns, db, ssh, smtp, ntp, ftp, jitter, http_lat, packet, cpu, disk, ws, name],
         )?;
         Ok(())
     }
