@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, nextTick } from 'vue'
 import {
-  Activity, ArrowRight, Bell, Check, ChevronDown, ChevronRight, CircleGauge,
+  Activity, ArrowRight, PanelLeftClose, PanelLeftOpen, Bell, Check, ChevronDown, ChevronRight, CircleGauge,
   CloudCog, Database, Download, FileClock, Gauge, LayoutDashboard, LogOut,
   Menu, Moon, Network, Plus, Radio, RefreshCw, Router, Search, Server, ShieldCheck,
   Signal, Sun, TerminalSquare, Trash2, X, Zap, Settings, Sliders, Layout, Clock,
@@ -12,7 +12,12 @@ const appRoutes = ['dashboard', 'devices', 'map', 'reports', 'integrations', 'lo
 const brandLogo = '/static/app/rustping-logo.png'
 const brandIcon = '/static/app/favicon.png'
 const route = ref(window.location.hash.replace('#/', '') || 'login')
+const sidebarCollapsed = ref(localStorage.getItem('rustping-sidebar-collapsed') === 'true')
 const theme = ref(localStorage.getItem('rustping-theme') || 'dark')
+function toggleSidebar() {
+  sidebarCollapsed.value = !sidebarCollapsed.value
+  localStorage.setItem('rustping-sidebar-collapsed', sidebarCollapsed.value)
+}
 const currentUser = ref(JSON.parse(sessionStorage.getItem('currentUser') || 'null'))
 const devices = ref([])
 const logs = ref([])
@@ -1171,23 +1176,32 @@ onBeforeUnmount(() => {
     </template>
 
     <template v-else>
-      <div class="app-shell">
+      <div :class="['app-shell', {collapsed: sidebarCollapsed}]">
         <div v-if="mobileMenu" class="sidebar-backdrop" @click="mobileMenu = false"></div>
-        <aside :class="['app-sidebar', {open: mobileMenu}]">
-          <button class="side-brand" aria-label="RustPing console" @click="go('dashboard')"><img :src="brandIcon" alt="" /><span>RUST <b>PING</b></span></button>
+        <aside :class="['app-sidebar', {open: mobileMenu, collapsed: sidebarCollapsed}]">
+          <div class="side-brand-wrap">
+            <button class="side-brand" aria-label="RustPing console" @click="go('dashboard')">
+              <img :src="sidebarCollapsed ? brandIcon : brandLogo" :style="sidebarCollapsed ? 'height:28px;width:28px;' : 'height:34px;width:auto;max-width:145px;'" alt="RustPing" />
+            </button>
+            <button class="sidebar-collapse-btn" title="Toggle Compact Sidebar" @click="toggleSidebar">
+              <PanelLeftClose v-if="!sidebarCollapsed" :size="16" />
+              <PanelLeftOpen v-else :size="16" />
+            </button>
+          </div>
+          
           <nav>
-            <button :class="{active: route === 'dashboard'}" @click="go('dashboard')"><LayoutDashboard :size="18" />Overview</button>
-            <button :class="{active: route === 'devices'}" @click="go('devices')"><Server :size="18" />Devices <b>{{ devices.length }}</b></button>
-            <button :class="{active: route === 'discovery'}" @click="go('discovery')"><Search :size="18" />Auto Discovery</button>
-            <button :class="{active: route === 'system_health'}" @click="go('system_health')"><Cpu :size="18" />Host System</button>
-            <button :class="{active: route === 'map'}" @click="go('map')"><Map :size="18" />Topology Map</button>
-            <button :class="{active: route === 'reports'}" @click="go('reports')"><BarChart2 :size="18" />Reports</button>
-            <button v-if="currentUser?.permissions?.view_logs" :class="{active: route === 'logs'}" @click="go('logs')"><TerminalSquare :size="18" />Event stream</button>
-            <button v-if="currentUser?.permissions?.manage_settings" :class="{active: route === 'settings'}" @click="go('settings')"><Settings :size="18" />Settings</button>
-            <button v-if="currentUser?.permissions?.manage_settings" :class="{active: route === 'integrations'}" @click="go('integrations')"><Webhook :size="18" />Integrations</button>
-            <button v-if="currentUser?.permissions?.manage_users" :class="{active: route === 'users'}" @click="go('users')"><Users :size="18" />Operators</button>
+            <button :class="{active: route === 'dashboard'}" title="Overview" @click="go('dashboard')"><LayoutDashboard :size="18" /><span v-if="!sidebarCollapsed">Overview</span></button>
+            <button :class="{active: route === 'devices'}" title="Devices" @click="go('devices')"><Server :size="18" /><span v-if="!sidebarCollapsed">Devices</span> <b v-if="!sidebarCollapsed">{{ devices.length }}</b></button>
+            <button :class="{active: route === 'discovery'}" title="Auto Discovery" @click="go('discovery')"><Search :size="18" /><span v-if="!sidebarCollapsed">Auto Discovery</span></button>
+            <button :class="{active: route === 'system_health'}" title="Host System" @click="go('system_health')"><Cpu :size="18" /><span v-if="!sidebarCollapsed">Host System</span></button>
+            <button :class="{active: route === 'map'}" title="Topology Map" @click="go('map')"><Map :size="18" /><span v-if="!sidebarCollapsed">Topology Map</span></button>
+            <button :class="{active: route === 'reports'}" title="Reports" @click="go('reports')"><BarChart2 :size="18" /><span v-if="!sidebarCollapsed">Reports</span></button>
+            <button v-if="currentUser?.permissions?.view_logs" :class="{active: route === 'logs'}" title="Event Stream" @click="go('logs')"><TerminalSquare :size="18" /><span v-if="!sidebarCollapsed">Event stream</span></button>
+            <button v-if="currentUser?.permissions?.manage_settings" :class="{active: route === 'settings'}" title="Settings" @click="go('settings')"><Settings :size="18" /><span v-if="!sidebarCollapsed">Settings</span></button>
+            <button v-if="currentUser?.permissions?.manage_settings" :class="{active: route === 'integrations'}" title="Integrations" @click="go('integrations')"><Webhook :size="18" /><span v-if="!sidebarCollapsed">Integrations</span></button>
+            <button v-if="currentUser?.permissions?.manage_users" :class="{active: route === 'users'}" title="Operators" @click="go('users')"><Users :size="18" /><span v-if="!sidebarCollapsed">Operators</span></button>
           </nav>
-          <div class="side-bottom"><button @click="toggleTheme"><Sun v-if="theme === 'dark'" :size="17" /><Moon v-else :size="17" />{{ theme === 'dark' ? 'Light' : 'Dark' }} mode</button><button @click="logout"><LogOut :size="17" />Sign out</button><div class="operator"><span>{{ currentUser?.username?.slice(0,1).toUpperCase() }}</span><div><strong>{{ currentUser?.username }}</strong><small>{{ currentUser?.role }} operator</small></div></div></div>
+          <div class="side-bottom"><button :title="theme === 'dark' ? 'Light mode' : 'Dark mode'" @click="toggleTheme"><Sun v-if="theme === 'dark'" :size="17" /><Moon v-else :size="17" /><span v-if="!sidebarCollapsed">{{ theme === 'dark' ? 'Light' : 'Dark' }} mode</span></button><button title="Sign out" @click="logout"><LogOut :size="17" /><span v-if="!sidebarCollapsed">Sign out</span></button><div class="operator" :title="currentUser?.username"><span>{{ currentUser?.username?.slice(0,1).toUpperCase() }}</span><div v-if="!sidebarCollapsed"><strong>{{ currentUser?.username }}</strong><small>{{ currentUser?.role }} operator</small></div></div></div>
         </aside>
         <div class="app-body">
           <svg width="0" height="0" style="position:absolute">
