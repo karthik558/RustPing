@@ -668,12 +668,26 @@ input[type="checkbox"]{accent-color:var(--lime);cursor:pointer}
 }
 
 .metric-grid article {
-  transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+  transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  border-right: 1px solid var(--line);
+  position: relative;
+  z-index: 1;
+}
+.metric-grid article:last-child {
+  border-right: 0;
 }
 .metric-grid article:hover {
-  background: rgba(207, 255, 51, 0.04);
-  border-color: rgba(207, 255, 51, 0.35);
+  background: rgba(207, 255, 51, 0.05) !important;
+  outline: 1px solid var(--lime) !important;
+  outline-offset: -1px;
+  z-index: 2;
+  box-shadow: inset 0 0 16px rgba(207, 255, 51, 0.08) !important;
   cursor: pointer;
+}
+.theme-light .metric-grid article:hover {
+  background: #edf3e6 !important;
+  outline: 1px solid #2e4400 !important;
+  outline-offset: -1px;
 }
 .metric-grid article:hover > span {
   border-color: var(--lime);
@@ -836,10 +850,6 @@ input[type="checkbox"]{accent-color:var(--lime);cursor:pointer}
 .site:not(.theme-light) .category-list > div:hover {
   background: #111612 !important;
 }
-.site:not(.theme-light) .metric-grid article:hover {
-  background: #0e1310 !important;
-  border-color: var(--lime) !important;
-}
 
 /* Light Theme Hover States & Colors */
 .theme-light .table-row:not(.table-head):hover {
@@ -851,10 +861,6 @@ input[type="checkbox"]{accent-color:var(--lime);cursor:pointer}
 .theme-light .event-list > div:hover,
 .theme-light .category-list > div:hover {
   background: #e6ede0 !important;
-}
-.theme-light .metric-grid article:hover {
-  background: #edf3e6 !important;
-  border-color: #789b00 !important;
 }
 .theme-light .floating-tooltip {
   background: #ffffff !important;
