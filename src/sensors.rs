@@ -6,8 +6,33 @@ use rand::Rng;
 use tokio::net::{TcpStream, lookup_host};
 use std::time::Instant;
 
+pub fn clean_hostname(input: &str) -> &str {
+    let s = input.trim();
+    if let Some(stripped) = s.strip_prefix("https://") {
+        stripped.split('/').next().unwrap_or(stripped).split(':').next().unwrap_or(stripped)
+    } else if let Some(stripped) = s.strip_prefix("http://") {
+        stripped.split('/').next().unwrap_or(stripped).split(':').next().unwrap_or(stripped)
+    } else if let Some(stripped) = s.strip_prefix("wss://") {
+        stripped.split('/').next().unwrap_or(stripped).split(':').next().unwrap_or(stripped)
+    } else if let Some(stripped) = s.strip_prefix("ws://") {
+        stripped.split('/').next().unwrap_or(stripped).split(':').next().unwrap_or(stripped)
+    } else {
+        s.split('/').next().unwrap_or(s).split(':').next().unwrap_or(s)
+    }
+}
+
+pub fn clean_url(input: &str) -> String {
+    let s = input.trim();
+    if s.starts_with("http://") || s.starts_with("https://") || s.starts_with("ws://") || s.starts_with("wss://") {
+        s.to_string()
+    } else {
+        format!("https://{}", s)
+    }
+}
+
 pub async fn monitor_ping(ip: &str) -> bool {
-    debug!("Pinging {}", ip);
+    let target_host = clean_hostname(ip);
+    debug!("Pinging {}", target_host);
     
     let mut success_count = 0;
     let attempts = 3; // Try 3 times before deciding status
@@ -19,7 +44,7 @@ pub async fn monitor_ping(ip: &str) -> bool {
                 .arg("1")
                 .arg("-t")  // Use -t for macOS timeout
                 .arg("2")   // 2 second timeout
-                .arg(ip)
+                .arg(target_host)
                 .output()
         } else {
             Command::new("ping")
@@ -27,7 +52,7 @@ pub async fn monitor_ping(ip: &str) -> bool {
                 .arg("1")
                 .arg("-w")
                 .arg("2000")
-                .arg(ip)
+                .arg(target_host)
                 .output()
         };
 
@@ -35,23 +60,23 @@ pub async fn monitor_ping(ip: &str) -> bool {
             Ok(Ok(output)) => {
                 if output.status.success() {
                     success_count += 1;
-                    debug!("Ping attempt {} successful for {}", i, ip);
+                    debug!("Ping attempt {} successful for {}", i, target_host);
                 } else {
-                    debug!("Ping attempt {} failed for {}", i, ip);
+                    debug!("Ping attempt {} failed for {}", i, target_host);
                 }
             }
             Ok(Err(e)) => {
-                error!("Ping attempt {} error for {}: {}", i, ip, e);
+                error!("Ping attempt {} error for {}: {}", i, target_host, e);
             }
-            Err(_) => error!("Ping attempt {} timed out for {}", i, ip),
+            Err(_) => error!("Ping attempt {} timed out for {}", i, target_host),
         }
 
         if success_count >= 2 {
-            info!("Ping UP for {} ({}/{} successful)", ip, success_count, attempts);
+            info!("Ping UP for {} ({}/{} successful)", target_host, success_count, attempts);
             return true;
         }
         if i - success_count >= 2 {
-            error!("Ping DOWN for {} ({}/{} failed)", ip, i - success_count, attempts);
+            error!("Ping DOWN for {} ({}/{} failed)", target_host, i - success_count, attempts);
             return false;
         }
 
@@ -60,19 +85,23 @@ pub async fn monitor_ping(ip: &str) -> bool {
 
     let status = success_count > attempts / 2;
     if status {
-        info!("Ping UP for {} ({}/{} successful)", ip, success_count, attempts);
+        info!("Ping UP for {} ({}/{} successful)", target_host, success_count, attempts);
     } else {
-        error!("Ping DOWN for {} ({}/{} failed)", ip, attempts - success_count, attempts);
+        error!("Ping DOWN for {} ({}/{} failed)", target_host, attempts - success_count, attempts);
     }
     
     status
 }
 
-pub async fn monitor_http(url: &str) -> bool {
-    debug!("Checking HTTP status for {}", url);
+pub async fn monitor_http(raw_url: &str) -> bool {
+    let target_url = clean_url(raw_url);
+    debug!("Checking HTTP status for {}", target_url);
 
     let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(7))
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .user_agent("RustPing-Monitor/2.0")
+        .danger_accept_invalid_certs(true)
         .build()
     {
         Ok(client) => client,
@@ -82,38 +111,39 @@ pub async fn monitor_http(url: &str) -> bool {
         }
     };
 
-    match client.get(url).send().await {
+    match client.get(&target_url).send().await {
         Ok(response) => {
             let status = response.status();
-            let success = status.is_success();
+            let success = status.is_success() || status.is_redirection();
             if success {
-                info!("HTTP check successful for {}: {}", url, status);
+                info!("HTTP check successful for {}: {}", target_url, status);
             } else {
-                error!("HTTP check failed for {}: {}", url, status);
+                error!("HTTP check failed for {}: {}", target_url, status);
             }
             success
         },
         Err(e) => {
-            error!("HTTP request failed for {}: {}", url, e);
+            error!("HTTP request failed for {}: {}", target_url, e);
             false
         }
     }
 }
 
 pub async fn monitor_tcp_port(ip: &str, port: u16) -> bool {
-    debug!("Checking TCP port {}:{}", ip, port);
-    let addr = format!("{}:{}", ip, port);
+    let target_host = clean_hostname(ip);
+    debug!("Checking TCP port {}:{}", target_host, port);
+    let addr = format!("{}:{}", target_host, port);
     match timeout(Duration::from_secs(3), TcpStream::connect(&addr)).await {
         Ok(Ok(_)) => {
-            info!("TCP Port {} is OPEN on {}", port, ip);
+            info!("TCP Port {} is OPEN on {}", port, target_host);
             true
         }
         Ok(Err(e)) => {
-            error!("TCP Port {} is CLOSED on {}: {}", port, ip, e);
+            error!("TCP Port {} is CLOSED on {}: {}", port, target_host, e);
             false
         }
         Err(_) => {
-            error!("TCP Port {} connection timed out on {}", port, ip);
+            error!("TCP Port {} connection timed out on {}", port, target_host);
             false
         }
     }

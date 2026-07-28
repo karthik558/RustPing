@@ -5,7 +5,7 @@ import {
   CloudCog, Database, Download, FileClock, Gauge, LayoutDashboard, LogOut,
   Menu, Moon, Network, Plus, Radio, RefreshCw, Router, Search, Server, ShieldCheck,
   Signal, Sun, TerminalSquare, Trash2, X, Zap, Settings, Sliders, Layout, Clock,
-  PieChart, Wifi, Users, Pencil, Map, BarChart2, Webhook, Eraser, Cpu, HardDrive, Thermometer
+  PieChart, Wifi, Users, Pencil, Map, BarChart2, Webhook, Eraser, Cpu, HardDrive, Thermometer, Folder
 } from 'lucide-vue-next'
 
 const appRoutes = ['dashboard', 'devices', 'map', 'reports', 'integrations', 'logs', 'statuspages', 'settings', 'users', 'discovery', 'system_health']
@@ -20,6 +20,7 @@ const loading = ref(false)
 const notice = ref('')
 const search = ref('')
 const statusFilter = ref('all')
+const selectedCategoryFilter = ref('all')
 const logSearch = ref('')
 const logStatusFilter = ref('all')
 const faqOpen = ref(0)
@@ -39,9 +40,22 @@ if (!appUsers.value || appUsers.value.length === 0) {
 }
 
 const loginForm = reactive({ username: 'admin', password: '', error: '' })
-const deviceForm = reactive({ name: '', ip: '', category: 'Network', sensors: ['Ping'], http_path: '', port: null, snmp_community: 'public', parent_device: '', db_type: 'PostgreSQL', ws_url: '', disk_path: '/' })
+const deviceForm = reactive({ name: '', ip: '', category: 'Network', sensors: ['Ping'], http_path: '', port: null, snmp_community: 'public', parent_device: '', db_type: 'PostgreSQL', ws_url: '', disk_path: '/', custom_category_active: false })
 const isEditingDevice = ref(false)
 const editingDeviceIndex = ref(-1)
+
+const availableCategories = computed(() => {
+  const defaults = ['Network', 'Services', 'Storage', 'External', 'Database', 'Security', 'Telemetry']
+  const existing = devices.value.map(d => d.category).filter(Boolean)
+  return Array.from(new Set([...defaults, ...existing]))
+})
+
+function onCategorySelectChange(e) {
+  if (e.target.value === '__NEW__') {
+    deviceForm.custom_category_active = true
+    deviceForm.category = ''
+  }
+}
 const userForm = reactive({ username: '', password: '', role: 'Operator', permissions: { manage_devices: false, view_logs: true, manage_settings: false, manage_users: false } })
 const showNotificationWindow = ref(false)
 const hoverTooltip = reactive({ visible: false, x: 0, y: 0, title: '', val: '', sub: '' })
@@ -269,14 +283,16 @@ const onlineCount = computed(() => devices.value.filter(d => d.ping_status === '
 const offlineCount = computed(() => devices.value.filter(d => d.ping_status === 'Down' || d.ping_status === 'Unreachable').length)
 const health = computed(() => devices.value.length ? Math.round((onlineCount.value / devices.value.length) * 100) : 100)
 const filteredDevices = computed(() => {
-    return devices.value.filter(d => {
+  return devices.value.filter(d => {
     const s = search.value.toLowerCase()
-    const matchesSearch = d.name.toLowerCase().includes(s) || d.ip.includes(s)
+    const matchesSearch = !s || d.name.toLowerCase().includes(s) || d.ip.toLowerCase().includes(s) || (d.category && d.category.toLowerCase().includes(s))
     const matchesStatus = statusFilter.value === 'all'
-    || (statusFilter.value === 'online' && d.ping_status === 'Up')
-    || (statusFilter.value === 'offline' && (d.ping_status === 'Down' || d.ping_status === 'Unreachable'))
-    return matchesSearch && matchesStatus
-  })})
+      || (statusFilter.value === 'online' && (d.ping_status === 'Up' || d.ping_status === true))
+      || (statusFilter.value === 'offline' && (d.ping_status === 'Down' || d.ping_status === false || d.ping_status === 'Unreachable'))
+    const matchesCategory = selectedCategoryFilter.value === 'all' || d.category === selectedCategoryFilter.value
+    return matchesSearch && matchesStatus && matchesCategory
+  })
+})
 
 const filteredLogs = computed(() => {
   let result = logs.value;
@@ -566,9 +582,33 @@ function toggleSensor(sensor) {
     : [...deviceForm.sensors, sensor]
 }
 
+function extractHostname(input) {
+  if (!input) return ''
+  let s = input.trim()
+  s = s.replace(/^(https?:\/\/|wss?:\/\/)/i, '')
+  return s.split('/')[0].split(':')[0]
+}
+
 async function addDevice() {
-  if (!deviceForm.name || !deviceForm.ip || !deviceForm.category || !deviceForm.sensors.length) {
-    flash('Complete the required fields and choose a sensor.')
+  // Smart auto-resolution of target IP/Hostname & default fields
+  if (!deviceForm.ip && deviceForm.http_path) {
+    deviceForm.ip = extractHostname(deviceForm.http_path)
+  }
+  if (!deviceForm.ip && deviceForm.ws_url) {
+    deviceForm.ip = extractHostname(deviceForm.ws_url)
+  }
+  if (!deviceForm.name) {
+    deviceForm.name = deviceForm.ip || (deviceForm.http_path ? extractHostname(deviceForm.http_path) : 'Monitored Target')
+  }
+  if (!deviceForm.category) {
+    deviceForm.category = 'Network'
+  }
+  if (!deviceForm.sensors || !deviceForm.sensors.length) {
+    deviceForm.sensors = deviceForm.http_path ? ['Http', 'Https'] : ['Ping']
+  }
+
+  if (!deviceForm.name || !deviceForm.ip) {
+    flash('Please complete the target IP, Hostname, or URL field.')
     return
   }
   const payload = { 
@@ -1141,7 +1181,16 @@ onBeforeUnmount(() => {
 
             <template v-else-if="route === 'devices'">
               <div class="page-title"><div><small>INVENTORY / {{ devices.length.toString().padStart(2,'0') }}</small><h1>Monitored devices</h1><p>Manage every target and the checks assigned to it.</p></div><button v-if="currentUser?.permissions?.manage_devices" class="signal-button compact" @click="openAddDeviceModal"><Plus :size="15" /> Add device</button></div>
-              <div class="table-tools"><label><Search :size="16" /><input v-model="search" placeholder="Search name, IP, or category" /></label><div><button :class="{active: statusFilter === 'all'}" @click="statusFilter = 'all'">All</button><button :class="{active: statusFilter === 'online'}" @click="statusFilter = 'online'">Online</button><button :class="{active: statusFilter === 'offline'}" @click="statusFilter = 'offline'">Offline</button></div></div>
+
+              <!-- Integrated Category Filter Bar -->
+              <div class="view-switch-bar" style="margin-bottom: 12px; width: 100%;">
+                <button :class="{active: selectedCategoryFilter === 'all'}" @click="selectedCategoryFilter = 'all'">All Categories ({{ devices.length }})</button>
+                <button v-for="cat in categoryStats" :key="cat.name" :class="{active: selectedCategoryFilter === cat.name}" @click="selectedCategoryFilter = cat.name">
+                  {{ cat.name }} ({{ cat.count }})
+                </button>
+              </div>
+
+              <div class="table-tools"><label><Search :size="16" /><input v-model="search" placeholder="Search name, IP, or category" /></label><div><button :class="{active: statusFilter === 'all'}" @click="statusFilter = 'all'">All Status</button><button :class="{active: statusFilter === 'online'}" @click="statusFilter = 'online'">Online</button><button :class="{active: statusFilter === 'offline'}" @click="statusFilter = 'offline'">Offline</button></div></div>
               <section class="data-table"><div class="table-row table-head"><span>Device</span><span>Address</span><span>Category</span><span>Sensors</span><span>Status</span><span style="display:flex;justify-content:flex-end;"></span></div><div v-for="device in filteredDevices" :key="device.ip" class="table-row"><span class="device-cell"><i :class="{offline: device.ping_status === 'Down', unreachable: device.ping_status === 'Unreachable'}"></i><b>{{ device.name }}</b></span><span class="mono">{{ device.ip }}</span><span>{{ device.category }}</span><span class="sensor-list"><b v-for="sensor in device.sensors" :key="sensor">{{ sensor }}</b></span><span><em :class="['status-pill', {offline: device.ping_status === 'Down', unreachable: device.ping_status === 'Unreachable'}]"><i></i>{{ formatStatus(device) }}</em></span><span style="display:flex;justify-content:flex-end;gap:5px;"><button v-if="currentUser?.permissions?.manage_devices" class="icon-button" :aria-label="`Edit ${device.name}`" @click="editDevice(device)"><Pencil :size="15" /></button><button v-if="currentUser?.permissions?.manage_devices" class="icon-button danger-button" :aria-label="`Delete ${device.name}`" @click="deleteDevice(device)"><Trash2 :size="15" /></button></span></div><div v-if="!filteredDevices.length" class="empty-state"><Search :size="24" /><strong>No devices found</strong><span>Try another search or filter.</span></div></section>
             </template>
 
@@ -1452,7 +1501,16 @@ onBeforeUnmount(() => {
           <div class="field-grid">
             <label>Device name<input v-model="deviceForm.name" placeholder="Core gateway" /></label>
             <label>IP or hostname<input v-model="deviceForm.ip" placeholder="10.0.0.1" /></label>
-            <label>Category<input v-model="deviceForm.category" placeholder="Network" /></label>
+            <label>Category
+              <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+                <select v-if="!deviceForm.custom_category_active" v-model="deviceForm.category" style="flex:1;height:42px;background:var(--paper);border:1px solid var(--line);color:inherit;padding:0 12px" @change="onCategorySelectChange">
+                  <option v-for="cat in availableCategories" :key="cat" :value="cat">{{ cat }}</option>
+                  <option value="__NEW__">+ Add New Category...</option>
+                </select>
+                <input v-else v-model="deviceForm.category" placeholder="Enter custom category..." style="flex:1;height:42px" />
+                <button v-if="deviceForm.custom_category_active" type="button" class="outline-button" style="min-height:42px;padding:0 10px;font-size:10px" @click="deviceForm.custom_category_active = false">Existing List</button>
+              </div>
+            </label>
             <label>Parent Device (IP)<input v-model="deviceForm.parent_device" placeholder="Dependency IP (optional)" /></label>
           </div>
 

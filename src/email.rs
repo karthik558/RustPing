@@ -158,6 +158,11 @@ impl EmailService {
     async fn create_mailer(&self) -> Result<AsyncSmtpTransport<Tokio1Executor>> {
         let config = self.config.read().await;
         
+        if config.sender_email.is_empty() || config.sender_password.is_empty() || config.sender_email.contains("example.com") || config.sender_email.contains("rustping") {
+            debug!("SMTP credentials not configured. Email notifications suppressed.");
+            return Err(anyhow::anyhow!("SMTP credentials unconfigured"));
+        }
+
         debug!("Creating SMTP connection to {}:{}", config.smtp_server, config.smtp_port);
         
         let creds = Credentials::new(
@@ -576,7 +581,13 @@ impl EmailService {
         let email = email_builder.body(html_body)?;
 
         debug!("Getting SMTP connection");
-        let mailer = self.get_mailer().await?;
+        let mailer = match self.get_mailer().await {
+            Ok(m) => m,
+            Err(e) => {
+                debug!("SMTP notification skipped: {}", e);
+                return Ok(());
+            }
+        };
 
         debug!("Sending batch notification email...");
         match timeout(SMTP_TIMEOUT, mailer.send(email)).await {
