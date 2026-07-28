@@ -43,18 +43,58 @@ const deviceForm = reactive({ name: '', ip: '', category: 'Network', sensors: ['
 const isEditingDevice = ref(false)
 const editingDeviceIndex = ref(-1)
 const userForm = reactive({ username: '', password: '', role: 'Operator', permissions: { manage_devices: false, view_logs: true, manage_settings: false, manage_users: false } })
+const showNotificationWindow = ref(false)
+const hoverTooltip = reactive({ visible: false, x: 0, y: 0, title: '', val: '', sub: '' })
+
+function showGraphHover(e, title, val, sub) {
+  const rect = e.currentTarget.getBoundingClientRect()
+  hoverTooltip.x = rect.left + rect.width / 2
+  hoverTooltip.y = rect.top - 10
+  hoverTooltip.title = title
+  hoverTooltip.val = val
+  hoverTooltip.sub = sub
+  hoverTooltip.visible = true
+}
+
+function handleGraphMouseMove(e, dataset, titlePrefix, unit, subInfo) {
+  const container = e.currentTarget
+  const rect = container.getBoundingClientRect()
+  const mouseX = Math.min(Math.max(0, e.clientX - rect.left), rect.width)
+  const percent = mouseX / rect.width
+  const index = Math.min(Math.max(0, Math.floor(percent * dataset.length)), dataset.length - 1)
+  const val = dataset[index]
+
+  let displayVal = val
+  if (typeof val === 'number' && unit === 'Mbps') displayVal = `${(val * 10.2).toFixed(1)} Mbps`
+  else if (typeof val === 'number' && unit === 'ms') displayVal = `${val} ms`
+  else if (typeof val === 'boolean') displayVal = val ? '100% Operational' : 'Incident Logged'
+
+  hoverTooltip.x = e.clientX
+  hoverTooltip.y = e.clientY - 15
+  hoverTooltip.title = `${titlePrefix} · SAMPLE #${index + 1}`
+  hoverTooltip.val = displayVal
+  hoverTooltip.sub = subInfo
+  hoverTooltip.visible = true
+}
+
+function hideGraphHover() {
+  hoverTooltip.visible = false
+}
+
 const changePasswordForm = reactive({ old_password: '', new_password: '', confirm_password: '' })
 const emailForm = reactive({
   smtp_server: '', smtp_port: '587', smtp_username: '', smtp_password: '',
   from_email: '', to_email: '', test_email: ''
 })
 const defaultSettings = {
+  theme: 'Dark',
   graphStyle: 'Bar',
   density: 'Comfortable',
   refreshRate: 5000,
   timeFormat: '24h'
 }
-const userSettings = reactive(JSON.parse(localStorage.getItem('rustping-settings') || JSON.stringify(defaultSettings)))
+const savedSettings = JSON.parse(localStorage.getItem('rustping-settings') || '{}')
+const userSettings = reactive({ ...defaultSettings, ...savedSettings })
 
 const throughputData = [22,31,27,46,39,58,51,72,64,81,70,88,77,91,83,96,86,92,79,89,72,84,68,76]
 const polylinePoints = computed(() => throughputData.map((n, i) => `${(i / (throughputData.length - 1)) * 100},${100 - n}`).join(' '))
@@ -267,7 +307,9 @@ function go(next) {
 
 function toggleTheme() {
   theme.value = theme.value === 'dark' ? 'light' : 'dark'
+  userSettings.theme = theme.value === 'dark' ? 'Dark' : 'Light'
   localStorage.setItem('rustping-theme', theme.value)
+  localStorage.setItem('rustping-settings', JSON.stringify(userSettings))
 }
 
 function flash(message) {
@@ -699,7 +741,13 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div :class="['site', `theme-${theme}`, `density-${userSettings.density.toLowerCase()}`]">
+  <div class="site" :class="[`theme-${theme.toLowerCase()}`, `density-${(userSettings.density || 'Comfortable').toLowerCase()}`]">
+    <!-- Dynamic Interactive Floating Tooltip -->
+    <div v-if="hoverTooltip.visible" class="floating-tooltip" :style="{ left: `${hoverTooltip.x}px`, top: `${hoverTooltip.y}px` }">
+      <small>{{ hoverTooltip.title }}</small>
+      <strong>{{ hoverTooltip.val }}</strong>
+      <span>{{ hoverTooltip.sub }}</span>
+    </div>
     <Transition name="toast"><div v-if="notice" class="toast"><Signal :size="15" />{{ notice }}</div></Transition>
 
     <template v-if="route === 'home'">
@@ -827,54 +875,115 @@ onBeforeUnmount(() => {
               <linearGradient id="latencyGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#cfff33" stop-opacity="0.8"/><stop offset="100%" stop-color="#cfff33" stop-opacity="0.0"/></linearGradient>
             </defs>
           </svg>
-          <header class="app-topbar"><button class="mobile-toggle" aria-label="Toggle navigation" @click="mobileMenu = !mobileMenu"><Menu :size="20" /></button><div class="app-breadcrumb"><span>RUSTPING</span><ChevronRight :size="13" /><b>{{ route }}</b></div><div class="top-actions"><span class="engine-status"><i></i> Engine online</span><button aria-label="Refresh data" @click="refreshData"><RefreshCw :class="{spin: loading}" :size="17" /></button><button aria-label="Notifications" @click="go('devices'); statusFilter = 'offline'"><Bell :size="17" /><i v-if="offlineCount"></i></button></div></header>
+          <header class="app-topbar">
+            <button class="mobile-toggle" aria-label="Toggle navigation" @click="mobileMenu = !mobileMenu"><Menu :size="20" /></button>
+            <div class="app-breadcrumb"><span>RUSTPING</span><ChevronRight :size="13" /><b>{{ route }}</b></div>
+            <div class="top-actions">
+              <span class="engine-status"><i></i> Engine online</span>
+              <button aria-label="Refresh data" @click="refreshData"><RefreshCw :class="{spin: loading}" :size="17" /></button>
+              <button aria-label="Notifications" @click="showNotificationWindow = !showNotificationWindow">
+                <Bell :size="17" /><i v-if="offlineCount"></i>
+              </button>
+
+              <!-- Notification Window Dropdown -->
+              <div v-if="showNotificationWindow" class="notification-popover" @click.self="showNotificationWindow = false">
+                <div class="notification-card">
+                  <div class="notification-head">
+                    <div>
+                      <small>SYSTEM ALERTS</small>
+                      <h2>Notifications & Incidents</h2>
+                    </div>
+                    <button class="close-btn" aria-label="Close" @click="showNotificationWindow = false"><X :size="16" /></button>
+                  </div>
+                  
+                  <div class="notification-body">
+                    <div v-if="offlineCount > 0" class="notification-list">
+                      <div v-for="dev in devices.filter(d => d.ping_status === 'Down' || d.http_status === 'FAIL')" :key="dev.name" class="notification-item" @click="showNotificationWindow = false; go('devices'); statusFilter = 'offline'">
+                        <span class="alert-icon"><Bell :size="14" /></span>
+                        <div>
+                          <strong>{{ dev.name }} ({{ dev.ip }})</strong>
+                          <p>PING: {{ dev.ping_status || 'Down' }} · HTTP: {{ dev.http_status || 'FAIL' }}</p>
+                        </div>
+                      </div>
+                    </div>
+                    <div v-else class="notification-empty">
+                      <Check :size="24" style="color:var(--lime)" />
+                      <p>All monitored targets are operational.</p>
+                    </div>
+                  </div>
+
+                  <div class="notification-footer">
+                    <button class="signal-button compact" @click="showNotificationWindow = false; go('logs')">
+                      <Activity :size="13" /> View Event Logs
+                    </button>
+                    <button class="outline-button compact" @click="showNotificationWindow = false; go('devices'); statusFilter = 'offline'">
+                      <Server :size="13" /> View Offline Devices
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </header>
           <main class="app-content">
             <template v-if="route === 'dashboard'">
               <div class="page-title"><div><small>LIVE OPERATIONS</small><h1>Network overview</h1><p>Every monitored signal, ordered for action.</p></div><button v-if="currentUser?.permissions?.manage_devices" class="signal-button compact" @click="showDeviceModal = true"><Plus :size="15" /> Add device</button></div>
-              <section class="metric-grid"><article><div><small>TOTAL DEVICES</small><strong>{{ devices.length }}</strong></div><span><Server :size="19" /></span><p><b>+{{ devices.length }}</b> active monitors</p></article><article><div><small>OPERATIONAL</small><strong>{{ onlineCount }}</strong></div><span><Signal :size="19" /></span><p><b>{{ health }}%</b> network health</p></article><article><div><small>INCIDENTS</small><strong>{{ offlineCount.toString().padStart(2,'0') }}</strong></div><span class="warn"><Bell :size="19" /></span><p :class="{danger: offlineCount}">{{ offlineCount ? 'Requires attention' : 'No active incidents' }}</p></article><article><div><small>UPTIME</small><strong>99.9<sup>%</sup></strong></div><span><CircleGauge :size="19" /></span><p><b>30D</b> rolling average</p></article></section>
+              <section class="metric-grid">
+                <article :title="`Total monitored targets: ${devices.length}`"><div><small>TOTAL DEVICES</small><strong>{{ devices.length }}</strong></div><span><Server :size="19" /></span><p><b>+{{ devices.length }}</b> active monitors</p></article>
+                <article :title="`Operational devices: ${onlineCount} (${health}% healthy)`"><div><small>OPERATIONAL</small><strong>{{ onlineCount }}</strong></div><span><Signal :size="19" /></span><p><b>{{ health }}%</b> network health</p></article>
+                <article :title="`Active incidents: ${offlineCount} offline`"><div><small>INCIDENTS</small><strong>{{ offlineCount.toString().padStart(2,'0') }}</strong></div><span class="warn"><Bell :size="19" /></span><p :class="{danger: offlineCount}">{{ offlineCount ? 'Requires attention' : 'No active incidents' }}</p></article>
+                <article :title="`30-day rolling uptime: 99.9%`"><div><small>UPTIME</small><strong>99.9<sup>%</sup></strong></div><span><CircleGauge :size="19" /></span><p><b>30D</b> rolling average</p></article>
+              </section>
               <section class="dashboard-grid">
                 <article class="panel throughput-panel"><div class="panel-title"><div><small>NETWORK LOAD</small><h2>Throughput</h2></div><span>LAST 12 HOURS</span></div>
-                  <div class="large-bars" :class="userSettings.graphStyle.toLowerCase()">
+                  <div class="large-bars" :class="(userSettings.graphStyle || 'Bar').toLowerCase()" @mousemove="handleGraphMouseMove($event, throughputData, 'THROUGHPUT', 'Mbps', 'Network Load | Optimal')" @mouseleave="hideGraphHover">
                     <template v-if="userSettings.graphStyle === 'Bar'">
                       <i v-for="(n,index) in throughputData" :key="index" :style="{height:`${n}%`}"></i>
                     </template>
                     <template v-else-if="userSettings.graphStyle === 'Line'">
                       <svg viewBox="0 0 100 100" preserveAspectRatio="none" class="svg-graph">
                         <polyline :points="polylinePoints" fill="none" stroke="var(--lime)" stroke-width="1.5" />
+                        <circle v-for="(n, index) in throughputData" :key="index" :cx="(index / (throughputData.length - 1)) * 100" :cy="100 - n" r="3" fill="var(--lime)" style="cursor:pointer">
+                        </circle>
                       </svg>
                     </template>
                     <template v-else-if="userSettings.graphStyle === 'Area'">
                       <svg viewBox="0 0 100 100" preserveAspectRatio="none" class="svg-graph">
                         <polygon :points="polygonPoints" fill="var(--lime-muted)" />
                         <polyline :points="polylinePoints" fill="none" stroke="var(--lime)" stroke-width="1.5" />
+                        <circle v-for="(n, index) in throughputData" :key="index" :cx="(index / (throughputData.length - 1)) * 100" :cy="100 - n" r="3" fill="var(--lime)" style="cursor:pointer">
+                        </circle>
                       </svg>
                     </template>
                   </div>
                   <div class="axis"><span>06:00</span><span>12:00</span><span>18:00</span><span>NOW</span></div></article>
                   
-                <article class="panel health-panel"><div class="panel-title"><div><small>FLEET STATE</small><h2>Overall health</h2></div><span>LIVE</span></div><div class="health-donut" :style="{'--health': `${health * 3.6}deg`}"><div><strong>{{ health }}<sup>%</sup></strong><small>HEALTHY</small></div></div><div class="health-legend"><span><i></i>Online <b>{{ onlineCount }}</b></span><span><i></i>Offline <b>{{ offlineCount }}</b></span></div></article>
+                <article class="panel health-panel"><div class="panel-title"><div><small>FLEET STATE</small><h2>Overall health</h2></div><span>LIVE</span></div><div class="health-donut" :style="{'--health': `${health * 3.6}deg`}" @mouseenter="showGraphHover($event, 'FLEET HEALTH', `${health}% OPERATIONAL`, `${onlineCount} Online · ${offlineCount} Offline`)" @mouseleave="hideGraphHover"><div><strong>{{ health }}<sup>%</sup></strong><small>HEALTHY</small></div></div><div class="health-legend"><span><i></i>Online <b>{{ onlineCount }}</b></span><span><i></i>Offline <b>{{ offlineCount }}</b></span></div></article>
                 
                 <article class="panel throughput-panel"><div class="panel-title"><div><small>PERFORMANCE</small><h2>Global Latency</h2></div><span>24 HOURS</span></div>
-                  <div class="large-bars" :class="userSettings.graphStyle.toLowerCase()">
+                  <div class="large-bars" :class="(userSettings.graphStyle || 'Bar').toLowerCase()" @mousemove="handleGraphMouseMove($event, latencyData, 'LATENCY', 'ms', 'Probe Response Time')" @mouseleave="hideGraphHover">
                     <template v-if="userSettings.graphStyle === 'Bar'">
                       <i v-for="(n,index) in latencyData" :key="index" :style="{height:`${n * 2}%`}"></i>
                     </template>
                     <template v-else-if="userSettings.graphStyle === 'Line'">
                       <svg viewBox="0 0 100 100" preserveAspectRatio="none" class="svg-graph">
                         <polyline :points="latencyPolyline" fill="none" stroke="var(--lime)" stroke-width="1.5" />
+                        <circle v-for="(n, index) in latencyData" :key="index" :cx="(index / (latencyData.length - 1)) * 100" :cy="100 - (n * 2)" r="3" fill="var(--lime)" style="cursor:pointer">
+                        </circle>
                       </svg>
                     </template>
                     <template v-else-if="userSettings.graphStyle === 'Area'">
                       <svg viewBox="0 0 100 100" preserveAspectRatio="none" class="svg-graph">
                         <polygon :points="latencyPolygon" fill="var(--lime-muted)" />
                         <polyline :points="latencyPolyline" fill="none" stroke="var(--lime)" stroke-width="1.5" />
+                        <circle v-for="(n, index) in latencyData" :key="index" :cx="(index / (latencyData.length - 1)) * 100" :cy="100 - (n * 2)" r="3" fill="var(--lime)" style="cursor:pointer">
+                        </circle>
                       </svg>
                     </template>
                   </div>
                   <div class="axis"><span>0ms</span><span>15ms</span><span>25ms</span><span>NOW</span></div></article>
                 
                 <article class="panel traffic-panel"><div class="panel-title"><div><small>BANDWIDTH</small><h2>Network Traffic</h2></div><span>LIVE</span></div>
-                  <div class="traffic-bars">
+                  <div class="traffic-bars" @mousemove="handleGraphMouseMove($event, [15,22,38,45,60,78,92,85,74,68,54,42], 'BANDWIDTH', 'Mbps', 'Real-time Gateway Aggregation')" @mouseleave="hideGraphHover">
                     <svg viewBox="0 0 100 100" preserveAspectRatio="none" class="svg-graph">
                       <polygon :points="egressPolygon" fill="var(--lime-muted)" />
                       <polyline :points="egressPolyline" fill="none" stroke="var(--lime)" stroke-width="1.5" />
@@ -887,7 +996,7 @@ onBeforeUnmount(() => {
 
                 <article class="panel uptime-panel">
                   <div class="panel-title"><div><small>RELIABILITY</small><h2>Uptime History</h2></div><span>90 DAYS</span></div>
-                  <div class="uptime-heatmap">
+                  <div class="uptime-heatmap" @mousemove="handleGraphMouseMove($event, uptimeHistory, 'UPTIME', 'day', '90-Day Rolling Log')" @mouseleave="hideGraphHover">
                     <div v-for="(up, index) in uptimeHistory" :key="index" :class="['uptime-block', { down: !up }]"></div>
                   </div>
                   <div class="axis"><span>90 days ago</span><span>Today</span></div>
