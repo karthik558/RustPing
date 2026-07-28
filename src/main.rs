@@ -448,12 +448,12 @@ async fn login_user(jar: &CookieJar<'_>, login_req: Json<LoginReq>, db: &State<D
 
 #[get("/favicon.ico")]
 async fn favicon_ico() -> Option<NamedFile> {
-    NamedFile::open(Path::new("static/app/favicon.png")).await.ok()
+    NamedFile::open(relative!("static/app/favicon.png")).await.ok()
 }
 
 #[get("/favicon.png")]
 async fn favicon_png() -> Option<NamedFile> {
-    NamedFile::open(Path::new("static/app/favicon.png")).await.ok()
+    NamedFile::open(relative!("static/app/favicon.png")).await.ok()
 }
 
 #[derive(Deserialize)]
