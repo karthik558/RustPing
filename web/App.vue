@@ -280,6 +280,30 @@ function handleGraphMouseMove(e, dataset, titlePrefix, unit, subInfo) {
   hoverTooltip.visible = true
 }
 
+function showNodeTooltip(e, node) {
+  const rect = e.currentTarget.getBoundingClientRect()
+  const statusStr = formatStatus(node)
+  const sensorsStr = Array.isArray(node.sensors) ? node.sensors.join(', ') : 'Ping'
+  const latStr = node.response_time || node.last_ping_ms ? `${node.response_time || node.last_ping_ms} ms` : 'N/A'
+  const bwStr = node.bandwidth_usage ? `${node.bandwidth_usage} Mbps` : 'N/A'
+  
+  hoverTooltip.x = rect.left + rect.width / 2
+  hoverTooltip.y = rect.top - 12
+  hoverTooltip.title = `${node.name} (${node.ip})`
+  hoverTooltip.val = `STATUS: ${statusStr} · LATENCY: ${latStr}`
+  hoverTooltip.sub = `Category: ${node.category} · Sensors: ${sensorsStr} · Bandwidth: ${bwStr}`
+  hoverTooltip.visible = true
+}
+
+function hideTooltip() {
+  hoverTooltip.visible = false
+}
+
+function openDeviceDetails(node) {
+  hideTooltip()
+  editDevice(node)
+}
+
 function hideGraphHover() {
   hoverTooltip.visible = false
 }
@@ -1551,20 +1575,16 @@ onBeforeUnmount(() => {
                     :key="node.ip" 
                     class="topo-node-wrap"
                     :style="{ position: 'absolute', left: (node.x / 10) + '%', top: (node.y / 5.8) + '%', transform: 'translate(-50%, -50%)', zIndex: 3 }"
+                    @mouseenter="showNodeTooltip($event, node)"
+                    @mouseleave="hideTooltip"
+                    @click="openDeviceDetails(node)"
                   >
                     <div :class="['topo-device-card', { down: node.ping_status === 'Down' || node.ping_status === false }]">
-                      <div class="topo-card-head">
-                        <component :is="node.icon || Server" :size="15" class="node-type-icon" />
-                        <span class="node-name">{{ node.name }}</span>
-                        <em :class="['status-pill', {offline: node.ping_status === 'Down', unreachable: node.ping_status === 'Unreachable'}]">
-                          <i></i>{{ formatStatus(node) }}
-                        </em>
-                      </div>
-                      <div class="topo-card-body">
-                        <span><label>IP</label><b>{{ node.ip }}</b></span>
-                        <span><label>LATENCY</label><b>{{ node.response_time || node.last_ping_ms || '12ms' }}</b></span>
-                        <span v-if="node.bandwidth_usage"><label>BW</label><b>{{ node.bandwidth_usage }} Mbps</b></span>
-                      </div>
+                      <component :is="node.icon || Server" :size="15" class="node-type-icon" />
+                      <span class="node-name">{{ node.name }}</span>
+                      <em :class="['status-pill', {offline: node.ping_status === 'Down', unreachable: node.ping_status === 'Unreachable'}]">
+                        <i></i>{{ formatStatus(node) }}
+                      </em>
                     </div>
                   </div>
 
